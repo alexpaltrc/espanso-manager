@@ -2,9 +2,49 @@
 
 A small desktop GUI (Rust + egui) for managing [espanso](https://espanso.org) text
 expansions on Windows, built to sit next to `espansod.exe` inside an espanso **portable**
-folder. It edits `.espanso/match/base.yml`, drives the daemon, and lives in the tray.
+folder.
 
 Version **0.0.1**. Not yet distributed to anyone.
+
+| Light | Dark |
+|---|---|
+| ![Light theme](docs/screenshot-light.png) | ![Dark theme](docs/screenshot-dark.png) |
+
+## What it does
+
+espanso replaces short triggers you type with longer text — `:sig` becomes your whole
+signature. Out of the box, changing those expansions means editing a YAML file by hand.
+This app is the window that stands in for that file:
+
+- Create, edit, reorder and delete expansions without seeing any YAML.
+- Group them into folders. Folders are this app's own idea; espanso never sees them.
+- Insert today's date without learning espanso's variable syntax — four ready-made
+  formats, plus a builder for any other, with a live preview.
+- Start, pause and stop espanso, and reload it after a save.
+- Live in the tray, start with Windows, and follow the Windows light/dark theme.
+- Export and import your expansions to move them to another computer.
+- Four interface languages: English, Spanish, Filipino and Hindi.
+
+Everything is edited through the app, but nothing is locked away: the file it writes is
+espanso's own `.espanso/match/base.yml`, still readable and still editable by hand.
+
+## Credits
+
+None of this would exist without two things:
+
+- **[espanso](https://espanso.org)** and the extraordinary work of its developer,
+  [Federico Terzi](https://federicoterzi.com). espanso does all the real work — the
+  keyboard hooks, the matching, the text injection. This app only gives it a window.
+- **[Claude Code](https://claude.com/claude-code)**, which wrote this program.
+
+The author, Alex Palacios, has **no programming knowledge whatsoever**. Every line here was
+written by Claude Code, at his direction and against his testing: he decided what the app
+should do, used it every day, and said what was wrong until it was right. He cannot review
+this code, and does not claim to.
+
+That is worth stating plainly rather than leaving to be discovered. If you are considering
+running this, read it, or build it yourself from source — do not take its correctness on
+anyone's word here.
 
 ## What this is not
 
@@ -15,8 +55,7 @@ same folder; they are not the same work.
 
 ## Repository scope
 
-This repository is the **source only** — 32 files, under 700 KB. It deliberately does not
-contain:
+This repository is the **source only** — under 1 MB. It deliberately does not contain:
 
 | Not here | Why |
 |---|---|
@@ -27,6 +66,9 @@ contain:
 
 All of those live one level above this folder in a working copy, outside the repository —
 see the note in `.gitignore` for why the root is drawn here and not higher.
+
+The screenshots above were taken from a throwaway copy holding invented expansions, never
+from a real one.
 
 ## Building
 

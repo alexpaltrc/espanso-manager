@@ -35,7 +35,6 @@ fn main() {
     // Alex Palacios has no company, and inventing one would put a false statement in the single
     // field an antivirus vendor might actually read. His own name is the true answer.
     res.set("CompanyName", "Alex Palacios");
-    res.set("LegalCopyright", "Copyright (c) 2026 Alex Palacios");
 
     // ASCII only, on purpose: these strings go through `rc.exe`, where a stray non-ASCII byte
     // fails in ways that are tedious to diagnose for text nobody reads closely.
