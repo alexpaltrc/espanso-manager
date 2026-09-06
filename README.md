@@ -15,6 +15,12 @@
 
 **Free forever. No account, nothing sent anywhere.**
 
+### [⬇️ Download for Windows](https://github.com/alexpaltrc/espanso-manager/releases/download/v0.0.1/EspansoManager-Portable-0.0.1.zip)
+
+<sub>10 MB · nothing gets installed · unzip and open `EspansoManager.exe`</sub>
+
+<sub>Not signed yet, so the first run shows *"Windows protected your PC"* → **More info** → **Run anyway**.</sub>
+
 </div>
 
 <table>
@@ -115,7 +121,7 @@ This repository is the **source only** — under 1 MB. It deliberately does not 
 
 | Not here | Why |
 |---|---|
-| 🏗️ `EspansoManager.exe`, the distribution ZIP | Build outputs. GitHub Releases is the place for these, when there is something to release. |
+| 🏗️ `EspansoManager.exe`, the distribution ZIP | Build outputs. They live in [Releases](https://github.com/alexpaltrc/espanso-manager/releases), which is where build outputs belong. |
 | 🧩 `espansod.exe`, `msvcp140*.dll`, … | Not our code. |
 | 🔒 `.espanso/`, `.espanso-manager/`, `.espanso-runtime/` | The user's real expansions and settings. |
 | 🗑️ `target/` | 1.3 GB build cache; regenerates in ~3 minutes. |
