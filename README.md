@@ -14,19 +14,86 @@ Version **0.0.1**. Not yet distributed to anyone.
 
 espanso replaces short triggers you type with longer text — `:sig` becomes your whole
 signature. Out of the box, changing those expansions means editing a YAML file by hand.
-This app is the window that stands in for that file:
-
-- Create, edit, reorder and delete expansions without seeing any YAML.
-- Group them into folders. Folders are this app's own idea; espanso never sees them.
-- Insert today's date without learning espanso's variable syntax — four ready-made
-  formats, plus a builder for any other, with a live preview.
-- Start, pause and stop espanso, and reload it after a save.
-- Live in the tray, start with Windows, and follow the Windows light/dark theme.
-- Export and import your expansions to move them to another computer.
-- Four interface languages: English, Spanish, Filipino and Hindi.
+This app is the window that stands in for that file.
 
 Everything is edited through the app, but nothing is locked away: the file it writes is
 espanso's own `.espanso/match/base.yml`, still readable and still editable by hand.
+
+## Features
+
+**Managing your expansions**
+
+- Create, edit and delete expansions without seeing a line of YAML.
+- Reorder them by dragging. Drag one onto a folder to file it there.
+- Group them into **folders**. Folders are this app's own idea — espanso never sees them,
+  so they cost nothing in the file and break nothing if you stop using the app.
+- Select several at once with Ctrl or Shift, then delete them or take them out of their
+  folder in one go.
+- Search box, and two list densities — comfortable cards or compact single lines.
+- The trigger field shows what you will actually type as you type it, refuses an empty or
+  duplicate trigger, and warns when a short trigger would swallow a longer one (`:hi` fires
+  before `:hint` can ever finish).
+
+**Pausing**
+
+- Right-click the tray icon to **pause for ten minutes** — it resumes on its own — or to
+  **pause indefinitely** until you say otherwise. For password fields, or for typing code
+  your triggers would interfere with.
+- Resume from the same menu. Espanso is started for you when the app opens and stopped when
+  you quit, and it is reloaded after every save — you never run a command to make a change
+  take effect.
+
+**Appearance**
+
+- **Light and dark themes**, or **follow Windows** and switch when Windows does.
+- The interface is drawn in **your own Windows accent colour**, in the shade Fluent
+  specifies for each theme.
+- Both are picked up **the moment you change them in Windows** — the app is told, it does
+  not poll — so it never sits there looking like the old theme.
+
+**Dates and times**
+
+- Insert the current date without learning that espanso has a variable syntax at all.
+- Four ready-made formats, each shown as the date it would produce right now.
+- For anything else, build the format by **dragging blocks** — Year, Month (name), Day,
+  Hour — with a live preview of the result.
+- The month's language is **stored with the expansion**, so "5 de septiembre" stays Spanish
+  on a colleague's English computer instead of quietly becoming "5 de September".
+
+**Living on your computer**
+
+- Sits in the **system tray**. Closing the window with the X puts it away rather than
+  shutting it down, so it never lands in front of what you were doing.
+- Optionally **starts with Windows**, in the background.
+- **One icon, not two**: espanso's own tray icon and its Windows notifications are turned
+  off on your behalf, with a comment left in its config saying who did it and why.
+- Replaces espanso's three-window setup wizard with a **single first-run screen** that lets
+  you try an expansion on the spot.
+- Portable. Everything lives in the folder; only the "start with Windows" checkbox writes
+  anything outside it.
+
+**Sharing and moving**
+
+- **Export** your expansions to a file and **import** someone else's. Importing only adds —
+  a trigger you already use is skipped, never overwritten, and the app tells you how many.
+- Choose the **prefix** for new expansions (`:`, `::`, `;`, `?`, `//`, or your own), and
+  re-prefix everything you already have in one step, after a confirmation that lists exactly
+  what will be renamed.
+
+**Four languages**
+
+- English, Spanish, Filipino and Hindi, switchable at any time. It changes this window only
+  — your expansions are never translated.
+
+**Not losing your work**
+
+- Every save keeps a **backup of the previous file** (the last 20), and every save is read
+  back before it is trusted.
+- Anything the interface cannot display — `imports:`, `global_vars:`, an expansion using
+  espanso features this app has no screen for — is **carried through untouched** instead of
+  being dropped.
+- If `base.yml` cannot be read, the app **refuses to save over it** and says so, rather than
+  replacing your expansions with an empty file.
 
 ## Credits
 
