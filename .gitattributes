@@ -1,0 +1,7 @@
+# Byte-for-byte fidelity, deliberately. Every file in this repository uses LF and must keep
+# using LF on every machine that clones it. Git for Windows defaults to rewriting line
+# endings to CRLF on checkout, which would silently modify all 33 files on disk and turn any
+# later diff into noise. `-text` turns that conversion off for everything, in both
+# directions. This project has been verified by comparing binaries byte by byte; a build
+# that differs because git edited the source would make that impossible.
+* -text

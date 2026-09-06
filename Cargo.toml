@@ -1,0 +1,38 @@
+[package]
+name = "espanso_manager"
+version = "0.0.1"
+edition = "2021"
+
+[[bin]]
+name = "EspansoManager"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+# Drops the unwinding tables: 7.23 MB -> 6.06 MB, measured, which is a sixth of a portable app
+# that gets copied onto USB sticks and mailed to colleagues. Nothing is given up in exchange:
+# `install_panic_hook` still runs and still shows its dialog (verified on the built exe), because
+# the panic runtime calls the hook before it aborts. And nothing here ever caught a panic — winit's
+# Windows backend wraps its callbacks in `catch_unwind` only to stop an unwind crossing the Win32
+# window procedure, which aborting prevents outright.
+panic = "abort"
+
+[dependencies]
+eframe = { version = "0.36.1", default-features = false, features = ["glow", "persistence", "default_fonts"] }
+egui = "0.36.1"
+raw-window-handle = "0.6.2"
+rfd = "0.17.2"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+serde_norway = "0.9.42"
+tray-icon = "0.24.2"
+# `Win32_Security` looks unused — the namespace is never named anywhere in src/. It is not:
+# `CreateMutexW`, the single-instance guard, is gated behind it because its first argument is a
+# `SECURITY_ATTRIBUTES` pointer, and we pass `None`. Removing it does not shrink anything, it
+# stops the crate compiling.
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_Security", "Win32_System_LibraryLoader", "Win32_Graphics_Gdi", "Win32_System_SystemInformation", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse"] }
+winit = { version = "0.30", default-features = false }
+winreg = "0.56.0"

@@ -1,0 +1,16 @@
+# The build cache. 1.3 GB, and it regenerates from source in about three minutes.
+/target
+
+# Windows and editor leftovers
+Thumbs.db
+desktop.ini
+*.pdb
+.vscode/
+.idea/
+
+# Nothing personal can reach this repository by accident, and not because of a rule
+# written here. The user's real expansions (.espanso/match/base.yml), their settings
+# (.espanso-manager/settings.json) and espanso's own binaries all live one level ABOVE
+# this folder — outside the repository, where git cannot see them at all. That is the
+# whole reason the repository root is espanso-manager-src and not the portable folder.
+# If you ever move this root upward, those three paths become the first thing to exclude.

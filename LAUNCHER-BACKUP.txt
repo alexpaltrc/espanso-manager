@@ -1,0 +1,87 @@
+EspansoManager — nuestro buscador propio (Alt + Barra espaciadora)
+==================================================================
+
+Estado: APAGADO a propósito, desde el 1 de septiembre de 2026.
+
+Espanso volvió a quedarse con Alt + Barra espaciadora y con su propio buscador, que es el que
+se está usando. Este archivo describe qué construimos, dónde vive, y cómo encenderlo de nuevo.
+
+
+CÓMO ENCENDERLO OTRA VEZ
+------------------------
+
+Una sola línea. En src/app.rs:
+
+    const OWN_LAUNCHER: bool = false;   ->   true
+
+PERO YA NO BASTA CON ESA LÍNEA. `show_search_window` se llama desde `logic`, y eframe 0.36.1
+prohíbe dibujar ahí: "You may NOT show any ui or do any painting during the call to `Self::logic`",
+y añade que con la ventana oculta no ejecuta ningún paso de egui en absoluto (epi.rs:153-162).
+Oculto en la bandeja es justamente el estado desde el que Alt+Espacio tiene que funcionar. Hoy no
+rompe nada porque con la constante en false `self.hotkey` es None y la ventana no puede abrirse
+nunca; en cuanto se encienda, hay que sacar `show_search_window` de `logic` antes de probar nada,
+o la ventana simplemente no aparecerá desde la bandeja y el motivo no se parecerá en nada a la
+causa.
+
+Eso vuelve a hacer dos cosas al arrancar la aplicación:
+
+  1. Escribe  search_shortcut: OFF  en .espanso/config/default.yml y reinicia espanso, para que
+     suelte el atajo (espanso lo tiene tomado mientras corre, así que el orden importa: primero
+     se apaga el suyo, después se reclama).
+  2. Registra Alt + Barra espaciadora para nosotros y abre nuestra ventana.
+
+Con la constante en false no se registra ningún atajo, así que nuestra ventana no puede abrirse
+y no hay nada nuestro estorbando. Es el único punto por el que podría interferir.
+
+
+QUÉ HAY CONSTRUIDO
+------------------
+
+  src/hotkey.rs          El atajo global. Escalera de candidatos (Alt+Espacio, luego
+                         Alt+Shift+Espacio) por si otro programa ya tiene el primero, y un hilo
+                         dormido en la cola de mensajes que no cuesta nada en reposo.
+
+                         Incluye break_alt_chord(): manda un VK_NONAME mientras Alt sigue abajo.
+                         Sin eso, la ventana de abajo ve "Alt bajó, Alt subió, nada en medio", lo
+                         lee como un toque de Alt y enciende su barra de menús; a partir de ahí
+                         todo lo que espanso escribe se interpreta como atajo de menú. En Bloc de
+                         notas la letra "e" es el engrane de Ajustes.
+
+  src/ui/search_view.rs  La ventana: campo de búsqueda, lista que se desplaza con flechas y
+                         rueda, filas medidas en píxeles con puntos suspensivos, y window_size()
+                         que calcula el alto exacto desde las métricas reales de la fuente.
+
+  src/display.rs         type_text()             escribe texto como Unicode, sin depender del
+                                                 diseño de teclado.
+                         wait_until_foreground() espera a que la ventana destino tenga el teclado
+                                                 de forma continua, no solo un instante.
+                         bring_to_front()        devuelve el foco con AttachThreadInput.
+
+  src/espanso_ctl.rs     request_expansion(): le habla al worker de espanso por su tubería
+                         \\.\pipe\espansoworkerv2 con su propio mensaje (IPCEvent externamente
+                         etiquetado, terminado en salto de línea), en vez de lanzar espansod.exe
+                         como proceso. Ahorra unos 50 ms por expansión.
+
+  src/app.rs             show_search_window() y hand_over_expansion(): dibujan la ventana y, un
+                         fotograma después de cerrarla, devuelven el teclado y piden la expansión.
+
+
+LO QUE NUNCA QUEDÓ RESUELTO, Y POR QUÉ
+--------------------------------------
+
+Espanso no expone hacia afuera ninguna forma de expandir sin borrar.
+
+Su único mensaje de entrada es RequestMatchExpansion { trigger, args }, y significa "expande como
+si acabaran de teclear este disparador": antes de escribir el reemplazo manda un retroceso por
+cada carácter del disparador. Medido: ":fe" se come 3, ":testing" se come 8.
+
+Su propio buscador no sufre esto porque elige la expansión por identidad y le dice a su motor que
+no hubo disparador — pero esa puerta es interna, no se puede tocar desde otro programa.
+
+Nuestra solución fue volver cierta esa suposición: escribir el disparador para que sus retrocesos
+lo borren a él y no al documento. Funcionaba en las pruebas automatizadas (26 corridas seguidas
+sin fallo, en dos aplicaciones distintas), pero seguía fallando en uso real. La diferencia entre
+el banco de pruebas y una persona escribiendo es justo lo que nunca logré atrapar.
+
+Si esto se retoma, ese es el punto de partida: el traspaso del teclado entre nuestra ventana y la
+ventana de abajo. No la expansión, que tarda 17 ms, ni el atajo, que funciona.
