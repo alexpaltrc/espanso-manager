@@ -2,6 +2,18 @@
 name = "espanso_manager"
 version = "0.0.1"
 edition = "2021"
+authors = ["Alex Palacios"]
+# `-or-later` and not plain `GPL-3.0`, because that is what the header at the top of every
+# source file actually offers: version 3, "or (at your option) any later version". espanso
+# declares the shorter `GPL-3.0`; the notices are the same, the SPDX string here is the precise
+# one for what ours says.
+license = "GPL-3.0-or-later"
+description = "A desktop window for your espanso text expansions"
+repository = "https://github.com/alexpaltrc/espanso-manager"
+# None of the four lines above reach the executable. `winresource::WindowsResource::new()` reads
+# only CARGO_PKG_VERSION and CARGO_PKG_NAME (checked in winresource 0.1.31, lib.rs:178). In
+# particular it never derives LegalCopyright from `authors`, so that field stays empty, which is
+# how it was asked for.
 
 [[bin]]
 name = "EspansoManager"

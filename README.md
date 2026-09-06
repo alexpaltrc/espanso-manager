@@ -8,6 +8,7 @@
 ![Rust](https://img.shields.io/badge/Rust-1.98-CE422B?logo=rust&logoColor=white)
 ![egui](https://img.shields.io/badge/egui-0.36-7B68EE)
 ![Version](https://img.shields.io/badge/version-0.0.1-blue)
+![License](https://img.shields.io/badge/license-GPL--3.0-blue)
 ![Portable](https://img.shields.io/badge/portable-no%20installer-2EA043)
 ![Free](https://img.shields.io/badge/free-forever-2EA043)
 ![Offline](https://img.shields.io/badge/no%20internet-required-6E7681)
@@ -97,7 +98,8 @@ None of this would exist without two things:
 This is **not a fork of espanso** and contains none of its code. EspansoManager is a
 separate program that talks to espanso from the outside, by launching `espansod.exe` as a
 child process and reading what it prints (`src/espanso_ctl.rs`). The two are shipped in the
-same folder; they are not the same work.
+same folder; they are not the same work. Sharing espanso's GPL-3.0 licence is a choice made out
+of respect for it, not something the code required.
 
 ---
 
@@ -168,4 +170,9 @@ speaker.
 
 ## 📄 License
 
-Not yet chosen. Until one is added, all rights are reserved.
+EspansoManager was created by **Alex Palacios** and is licensed under the
+[GPL-3.0 license](LICENSE) — the same licence [espanso](https://espanso.org) uses, matched on
+purpose rather than by obligation.
+
+Use it, study it, change it, share it. If you pass on a changed version, it travels with its
+source and the same licence, so whoever receives it keeps every freedom you had.
