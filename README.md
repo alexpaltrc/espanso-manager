@@ -130,11 +130,15 @@ Requires a stable Rust toolchain (built with 1.98, edition 2021) on Windows.
 cargo build --release
 ```
 
-The binary lands at `target/release/EspansoManager.exe` and is meant to be copied one level
-up, next to `espansod.exe`.
+The binary lands at `target/release/EspansoManager.exe`. In a distribution folder it stands
+alone at the top level, with `espansod.exe`, the DLLs and the `.espanso*` folders one level
+down in `Program Files`, so that unzipping leaves exactly one thing to double-click.
+`resolve_base_dir` in `main.rs` finds that subfolder — and still falls back to the
+executable's own directory, which is the older layout where the two executables sat side by
+side, so dropping a new binary into an existing folder keeps working.
 
 ```sh
-cargo test                            # 49 tests
+cargo test                            # 53 tests
 cargo clippy --release --all-targets
 ```
 

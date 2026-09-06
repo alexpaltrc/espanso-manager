@@ -59,6 +59,7 @@ use espanso_ctl::EspansoCtl;
 use settings::SettingsStore;
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
+use std::path::PathBuf;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
 use windows::Win32::System::Threading::CreateMutexW;
@@ -131,12 +132,44 @@ fn install_panic_hook(t: &'static i18n::Strings) {
     }));
 }
 
+/// Subfolder holding everything that is not the executable: `espansod.exe`, its DLLs, the two
+/// `.espanso` folders, ours, and the text files. Named the way Windows names such a folder, so
+/// that a person who has never seen this program reads it as "not for me" without being told.
+const RESOURCES_DIR: &str = "Program Files";
+
+/// The folder every other path in this program is derived from.
+///
+/// Two layouts have to work at once. The tidy one ships everything except the executable inside
+/// [`RESOURCES_DIR`], so unzipping produces exactly one thing to double-click. The old one — the
+/// one already on other people's machines — has the executable sitting among nineteen DLLs, and
+/// the documented way to update it is "replace only `EspansoManager.exe`". That instruction has to
+/// keep being true: a new binary dropped into an old folder finds no subfolder, falls through to
+/// the executable's own directory, and carries on exactly as before.
+///
+/// The subfolder is only believed if it holds something of ours. A bare directory that happens to
+/// share the name is not enough, because being wrong here does not fail loudly — it would silently
+/// look for the user's expansions in a folder that has none, and offer to start them a fresh empty
+/// one.
+fn resolve_base_dir(exe_dir: PathBuf) -> PathBuf {
+    let nested = exe_dir.join(RESOURCES_DIR);
+    let is_ours = nested.join("espansod.exe").is_file()
+        || nested.join(".espanso").is_dir()
+        || nested.join(".espanso-manager").is_dir();
+    if is_ours {
+        nested
+    } else {
+        exe_dir
+    }
+}
+
 fn main() {
     let exe_path = std::env::current_exe().expect("could not determine the executable's path");
-    let base_dir = exe_path
-        .parent()
-        .expect("the executable should have a containing folder")
-        .to_path_buf();
+    let base_dir = resolve_base_dir(
+        exe_path
+            .parent()
+            .expect("the executable should have a containing folder")
+            .to_path_buf(),
+    );
 
     // The saved language has to be read before anything can be shown, since even the earliest
     // dialogs (already-running, panic) need to speak it.
@@ -392,5 +425,52 @@ fn silence_espanso_wizard(
         // espanso's key-value store is one JSON document per key, so the whole file is the word
         // `true`.
         let _ = std::fs::write(kvs.join(flag), b"true");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("espansomanager-basedir-test-{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn an_old_folder_without_the_subfolder_stays_on_the_executables_own_directory() {
+        let dir = scratch("old-layout");
+        assert_eq!(resolve_base_dir(dir.clone()), dir);
+    }
+
+    #[test]
+    fn a_tidied_folder_resolves_into_the_subfolder() {
+        let dir = scratch("tidy-layout");
+        let nested = dir.join(RESOURCES_DIR);
+        std::fs::create_dir_all(nested.join(".espanso")).unwrap();
+        assert_eq!(resolve_base_dir(dir), nested);
+    }
+
+    /// An empty directory of the same name must not capture the lookup: doing so would send the
+    /// program off to read expansions from a folder that has none, which fails silently rather
+    /// than loudly.
+    #[test]
+    fn a_folder_that_only_shares_the_name_is_not_mistaken_for_ours() {
+        let dir = scratch("name-clash");
+        std::fs::create_dir_all(dir.join(RESOURCES_DIR)).unwrap();
+        assert_eq!(resolve_base_dir(dir.clone()), dir);
+    }
+
+    /// The daemon alone is enough, because that is what a folder looks like before the app has
+    /// ever been run in it — the `.espanso-manager` folder does not exist until the first save.
+    #[test]
+    fn the_daemon_on_its_own_is_enough_to_recognise_the_subfolder() {
+        let dir = scratch("daemon-only");
+        let nested = dir.join(RESOURCES_DIR);
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("espansod.exe"), b"not really an exe").unwrap();
+        assert_eq!(resolve_base_dir(dir), nested);
     }
 }
