@@ -9,6 +9,10 @@
 ![egui](https://img.shields.io/badge/egui-0.36-7B68EE)
 ![Version](https://img.shields.io/badge/version-0.0.1-blue)
 ![Portable](https://img.shields.io/badge/portable-no%20installer-2EA043)
+![Free](https://img.shields.io/badge/free-forever-2EA043)
+![Offline](https://img.shields.io/badge/no%20internet-required-6E7681)
+
+**Free forever. No account, nothing sent anywhere.**
 
 </div>
 
@@ -55,6 +59,16 @@ short thing, you write the long thing, and it is ready.
 | 💾 | Keep a backup of every save, in case you change your mind. |
 
 There is more than this in there. It is meant to be found by using it.
+
+---
+
+## 🔒 Free, and yours
+
+|  |  |
+|---|---|
+| 💚 | **Free forever.** No price, no trial, no paid version waiting further down the road. |
+| 🔌 | **No internet.** There is no networking code in it at all — nothing in `Cargo.toml` is even capable of opening a connection. |
+| 🏠 | **Your text never leaves your computer.** No account, no sync, no telemetry, no analytics. Your expansions are a plain file on your own disk, and that is the only place they are. |
 
 ---
 
