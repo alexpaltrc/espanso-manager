@@ -2,7 +2,7 @@
 
 # ⌨️ EspansoManager
 
-**A small desktop window for your [espanso](https://espanso.org) text expansions.**
+**A small desktop window for your text expansions — [espanso](https://espanso.org) included.**
 
 ![Windows](https://img.shields.io/badge/Windows-0078D4?logo=windows&logoColor=white)
 ![Rust](https://img.shields.io/badge/Rust-1.98-CE422B?logo=rust&logoColor=white)
@@ -17,7 +17,7 @@
 
 ### [⬇️ Download for Windows](https://github.com/alexpaltrc/espanso-manager/releases/download/v0.0.1/EspansoManager-Portable-0.0.1.zip)
 
-<sub>10 MB · nothing gets installed · unzip and open `EspansoManager.exe`</sub>
+<sub>10 MB · espanso is in the box · nothing gets installed · unzip and open `EspansoManager.exe`</sub>
 
 <sub>Not signed yet, so the first run shows *"Windows protected your PC"* → **More info** → **Run anyway**.</sub>
 
@@ -45,6 +45,10 @@ browser.
 The only awkward part is setting those up: normally it means opening a configuration file
 and editing it by hand. EspansoManager is the window that does that for you. You write the
 short thing, you write the long thing, and it is ready.
+
+**espanso itself is inside the download**, already set up and started for you. There is no
+second program to go and fetch, and nothing to install — one ZIP, unzip it, open the one
+`.exe` inside.
 
 > 💡 Nothing is hidden away, though. It writes espanso's own `.espanso/match/base.yml`, so
 > the file stays perfectly readable and you can still edit it by hand whenever you want to.
