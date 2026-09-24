@@ -17,19 +17,21 @@
  * along with EspansoManager.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-//! What Windows itself is currently wearing: light or dark, and the accent colour.
+//! What Windows itself is currently wearing: light or dark, and whether contrast is on.
 //!
-//! Three registry reads and a preference. `ThemeMode` is the user's choice — follow the system, or
+//! A few registry reads and a preference. `ThemeMode` is the user's choice — follow the system, or
 //! pin one appearance — and `follows_system` is what lets a pinned theme skip the watch in
 //! [`crate::sysevents`] entirely, since a pinned theme cannot change underneath us.
 //!
 //! Every read falls back rather than failing: a missing `AppsUseLightTheme` means light, which is
-//! Windows' own default on a fresh install, and a missing accent palette means Windows' default
-//! blue. An app that refuses to draw because a registry value is absent would be a worse answer
-//! than one drawn in the wrong blue.
+//! Windows' own default on a fresh install. An app that refuses to draw because a registry value is
+//! absent would be a worse answer than one drawn in the wrong appearance.
 //!
-//! The colours themselves are not here — this module answers *which* palette, and
-//! `app.rs` holds the palette.
+//! The accent is not read from Windows: the app draws in its own violet (see `app.rs`), so there is
+//! nothing here for it.
+//!
+//! The ordinary colours are not here: app.rs and icons.rs hold their own palettes. Windows'
+//! contrast colours are returned verbatim because those are the user's accessibility choices.
 
 use serde::{Deserialize, Serialize};
 use winreg::enums::HKEY_CURRENT_USER;
@@ -73,36 +75,25 @@ pub fn is_light_theme() -> bool {
         .unwrap_or(true)
 }
 
-/// Windows' default accent (`#0078D4`) and the two shades Fluent derives from it, used when the
-/// real palette can't be read.
-const FALLBACK_ACCENT_LIGHT2: (u8, u8, u8) = (0x4C, 0xC2, 0xFF);
-const FALLBACK_ACCENT_DARK1: (u8, u8, u8) = (0x00, 0x67, 0xC0);
-
-/// The user's own accent colour, in the shade Fluent specifies for the given theme.
-///
-/// Windows keeps eight shades of the chosen accent in `AccentPalette`, ordered lightest to darkest.
-/// Fluent uses *Light2* (index 1) for accent text and fills on dark backgrounds and *Dark1*
-/// (index 4) on light ones — picking the same shades is what makes the app read as part of the
-/// system rather than as something with its own idea of blue.
-pub fn system_accent(is_light: bool) -> (u8, u8, u8) {
-    let index = if is_light { 4 } else { 1 };
-    read_accent_palette()
-        .and_then(|p| {
-            let o = index * 4;
-            (p.len() >= o + 3).then(|| (p[o], p[o + 1], p[o + 2]))
-        })
-        .unwrap_or(if is_light {
-            FALLBACK_ACCENT_DARK1
-        } else {
-            FALLBACK_ACCENT_LIGHT2
-        })
+/// The notification area follows Windows mode, even when app mode is pinned to the opposite theme.
+pub fn is_light_taskbar() -> bool {
+    RegKey::predef(HKEY_CURRENT_USER)
+        .open_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize")
+        .and_then(|key| key.get_value::<u32, _>("SystemUsesLightTheme"))
+        .map(|v| v != 0)
+        .unwrap_or(false)
 }
 
-fn read_accent_palette() -> Option<Vec<u8>> {
-    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let key = hkcu
-        .open_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Accent")
-        .ok()?;
-    let value: winreg::RegValue = key.get_raw_value("AccentPalette").ok()?;
-    Some(value.bytes.into_owned())
+/// Native contrast themes override branded icon colours. Return background/foreground in RGB.
+pub fn contrast_colors() -> Option<([u8; 3], [u8; 3])> {
+    use windows::Win32::UI::Accessibility::{HIGHCONTRASTW, HCF_HIGHCONTRASTON};
+    use windows::Win32::UI::WindowsAndMessaging::{SystemParametersInfoW, SPI_GETHIGHCONTRAST, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS};
+    use windows::Win32::Graphics::Gdi::{GetSysColor, COLOR_WINDOW, COLOR_WINDOWTEXT};
+    let mut contrast = HIGHCONTRASTW { cbSize: std::mem::size_of::<HIGHCONTRASTW>() as u32, ..Default::default() };
+    let enabled = unsafe {
+        SystemParametersInfoW(SPI_GETHIGHCONTRAST, contrast.cbSize, Some(&mut contrast as *mut _ as *mut std::ffi::c_void), SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0))
+    }.is_ok() && (contrast.dwFlags.0 & HCF_HIGHCONTRASTON.0) != 0;
+    if !enabled { return None; }
+    let rgb = |c: u32| [c as u8, (c >> 8) as u8, (c >> 16) as u8];
+    Some(unsafe { (rgb(GetSysColor(COLOR_WINDOW)), rgb(GetSysColor(COLOR_WINDOWTEXT))) })
 }

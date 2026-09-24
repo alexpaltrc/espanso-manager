@@ -35,7 +35,6 @@
 
 use crate::espanso_ctl::{CtlResult, EspansoCtl};
 use crate::i18n::{fill, Strings};
-use std::path::Path;
 use std::time::{Duration, Instant};
 use eframe::egui;
 use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
@@ -157,6 +156,7 @@ pub struct Tray {
     pub icon: TrayIcon,
     icon_active: Icon,
     icon_paused: Icon,
+    appearance: crate::icons::Appearance,
     toggle_item: MenuItem,
     pause10_item: MenuItem,
     quit_item: MenuItem,
@@ -185,14 +185,11 @@ fn ctl_result_to_message(
 }
 
 impl Tray {
-    /// `runtime_dir` is Espanso's own `.espanso-runtime` folder, which already contains
-    /// `normalv2.ico` / `disabledv2.ico` after the daemon's first run — reusing Espanso's own
-    /// icons rather than shipping our own.
-    pub fn new(runtime_dir: &Path, t: &'static Strings) -> Result<Self, String> {
-        let icon_active =
-            Icon::from_path(runtime_dir.join("normalv2.ico"), None).map_err(|e| e.to_string())?;
-        let icon_paused =
-            Icon::from_path(runtime_dir.join("disabledv2.ico"), None).map_err(|e| e.to_string())?;
+    /// Icons belong to the Manager, so replacing only the exe updates every portable layout.
+    pub fn new(t: &'static Strings) -> Result<Self, String> {
+        let appearance = crate::icons::Appearance::current();
+        let icon_active = appearance.tray_icon(false)?;
+        let icon_paused = appearance.tray_icon(true)?;
 
         let toggle_item = MenuItem::new(t.tray_pause, true, None);
         let pause10_item = MenuItem::new(t.tray_pause_10, true, None);
@@ -202,18 +199,20 @@ impl Tray {
         let quit_id = quit_item.id().clone();
 
         let menu = Menu::new();
+        if !crate::EXPERIMENTAL {
         menu.append(&pause10_item).map_err(|e| e.to_string())?;
         menu.append(&toggle_item).map_err(|e| e.to_string())?;
         // A rule before Quit. The two above it are reversible in a click; this one ends the
         // session, and putting it flush against them invites the wrong one.
         menu.append(&PredefinedMenuItem::separator())
             .map_err(|e| e.to_string())?;
+        }
         menu.append(&quit_item).map_err(|e| e.to_string())?;
 
         let icon = TrayIconBuilder::new()
             .with_menu(Box::new(menu))
             .with_icon(icon_active.clone())
-            .with_tooltip(t.tray_tooltip)
+            .with_tooltip(if crate::EXPERIMENTAL { "Espanso Manager · Studio" } else { t.tray_tooltip })
             .with_menu_on_left_click(false)
             .build()
             .map_err(|e| e.to_string())?;
@@ -222,6 +221,7 @@ impl Tray {
             icon,
             icon_active,
             icon_paused,
+            appearance,
             toggle_item,
             pause10_item,
             quit_item,
@@ -237,8 +237,24 @@ impl Tray {
     pub fn relabel(&self, t: &'static Strings) {
         self.pause10_item.set_text(t.tray_pause_10);
         self.quit_item.set_text(t.tray_quit);
-        let _ = self.icon.set_tooltip(Some(t.tray_tooltip));
+        let _ = self.icon.set_tooltip(Some(if crate::EXPERIMENTAL { "Espanso Manager · Studio" } else { t.tray_tooltip }));
         self.sync_visuals(t);
+    }
+
+    /// Called on Windows appearance/display notifications from App::logic, including when hidden.
+    /// Build both states before replacing either; a failed allocation leaves the old pair intact.
+    pub fn refresh_appearance(&mut self, t: &'static Strings) -> Result<(), String> {
+        let appearance = crate::icons::Appearance::current();
+        if appearance == self.appearance { return Ok(()); }
+        let active = appearance.tray_icon(false)?;
+        let paused = appearance.tray_icon(true)?;
+        let current = if self.state == PauseState::Active { &active } else { &paused };
+        self.icon.set_icon(Some(current.clone())).map_err(|e| e.to_string())?;
+        self.icon_active = active;
+        self.icon_paused = paused;
+        self.appearance = appearance;
+        self.sync_visuals(t);
+        Ok(())
     }
 
     fn sync_visuals(&self, t: &'static Strings) {
@@ -250,6 +266,15 @@ impl Tray {
         };
         self.toggle_item.set_text(label);
         let _ = self.icon.set_icon(Some(icon.clone()));
+    }
+
+    /// Whether espanso is paused, for the one screen that shows it.
+    ///
+    /// The tray is where this lives — it owns the timed pause, the icon and the menu label — so the
+    /// window asks rather than keeping a second copy that could disagree with the icon beside the
+    /// clock. See [`crate::app::AppState::paused`].
+    pub fn is_paused(&self) -> bool {
+        self.state != PauseState::Active
     }
 
     pub fn pause_timed(&mut self, ctl: &EspansoCtl, t: &'static Strings) -> Result<(), String> {

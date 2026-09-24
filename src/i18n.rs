@@ -79,9 +79,10 @@ impl Lang {
     /// find it. When the glyphs are not there, the Latin name is shown instead, which is at least
     /// readable and recognisable. This is what makes the loading conditional affordable.
     pub fn picker_label(self, ctx: &egui::Context) -> &'static str {
-        let sample = self.script_sample();
-        let font_id = egui::FontId::proportional(14.0);
-        if ctx.fonts_mut(|f| f.has_glyph(&font_id, sample)) {
+        // Through `can_draw`, not egui's `has_glyph`: the two disagree, and the one that lies
+        // happens to give the right answer for Devanagari by luck of face ordering. Asking the
+        // same question everywhere is what keeps that luck from mattering.
+        if crate::fonts::can_draw(ctx, egui::FontFamily::Proportional, self.script_sample()) {
             self.native_name()
         } else {
             self.latin_name()
@@ -98,7 +99,31 @@ impl Lang {
     }
 }
 
-/// Substitutes `{placeholder}` tokens in a template.
+/// [`fill`] for a sentence about a number of things, with `{n}` set to `n`.
+///
+/// "{n} expansión(es) movida(s)" is how a template avoids choosing, and it reads like a form to
+/// fill in. So a counted string carries its forms instead, split by `|`: `one|many`, or
+/// `none|one|many` when zero deserves its own sentence ("the folder was empty" rather than "and
+/// its 0 expansions"). A template without `|` is used for every count. Two forms are enough for
+/// the four languages here: Filipino repeats the same text where it does not inflect, and Hindi's
+/// singular is one, as in English and Spanish.
+pub fn fill_count(template: &str, n: usize, args: &[(&str, &str)]) -> String {
+    let forms: Vec<&str> = template.split('|').collect();
+    let form = match (forms.len(), n) {
+        (3, 0) => forms[0],
+        (3, 1) => forms[1],
+        (3, _) => forms[2],
+        (2, 1) => forms[0],
+        (2, _) => forms[1],
+        _ => template,
+    };
+    let count = n.to_string();
+    let mut all = Vec::with_capacity(args.len() + 1);
+    all.push(("n", count.as_str()));
+    all.extend_from_slice(args);
+    fill(form, &all)
+}
+
 /// Substitutes `{name}` placeholders in a translated string.
 ///
 /// One left-to-right pass over the template, which is what makes it safe. The earlier version ran
@@ -148,9 +173,7 @@ pub struct Strings {
     // --- main window ---------------------------------------------------------------------
     pub app_title: &'static str,
     pub settings_button: &'static str,
-    pub tips_title: &'static str,
     pub tips_button_tip: &'static str,
-    pub tips_footer: &'static str,
     pub tip_search_title: &'static str,
     pub tip_search_body: &'static str,
     pub onboarding_title: &'static str,
@@ -175,8 +198,6 @@ pub struct Strings {
     pub tip_undo_body: &'static str,
     pub tip_pause_title: &'static str,
     pub tip_pause_body: &'static str,
-    pub tip_select_title: &'static str,
-    pub tip_select_body: &'static str,
     pub new_expansion: &'static str,
     pub search_label: &'static str,
     pub empty_title: &'static str,
@@ -193,22 +214,17 @@ pub struct Strings {
     pub edit_tip: &'static str,
     pub delete: &'static str,
     pub delete_tip: &'static str,
-    pub rename_folder_tip: &'static str,
-    pub delete_folder_tip: &'static str,
-    pub save_name_tip: &'static str,
     pub cancel: &'static str,
-    pub cancel_tip: &'static str,
     pub selected_count: &'static str,
     pub remove_from_folder: &'static str,
     pub delete_selected: &'static str,
-    pub clear_selection_tip: &'static str,
     pub moving_n: &'static str,
 
     // --- confirmation modal --------------------------------------------------------------
     pub confirm_delete_folder_title: &'static str,
     pub confirm_delete_folder_body: &'static str,
     pub confirm_delete_selection_title: &'static str,
-    pub confirm_delete_selection_body: &'static str,
+    pub confirm_delete_undo: &'static str,
     pub see_more: &'static str,
 
     // --- edit form -----------------------------------------------------------------------
@@ -273,6 +289,17 @@ pub struct Strings {
     pub import_none_added: &'static str,
     pub import_not_ours: &'static str,
     pub import_error: &'static str,
+    /// The folder picker that stands in front of an export or an import. Only shown when there is
+    /// more than one folder to choose between, so none of these appear in the commonest case.
+    pub transfer_pick_export_title: &'static str,
+    pub transfer_pick_import_title: &'static str,
+    pub transfer_pick_hint: &'static str,
+    pub transfer_pick_all: &'static str,
+    pub transfer_pick_none: &'static str,
+    pub transfer_pick_export_total: &'static str,
+    pub transfer_pick_import_total: &'static str,
+    pub transfer_pick_export_go: &'static str,
+    pub transfer_pick_import_go: &'static str,
     pub prefix_section: &'static str,
     pub prefix_hint: &'static str,
     pub custom_label: &'static str,
@@ -297,7 +324,6 @@ pub struct Strings {
     pub prefix_confirm_more: &'static str,
     pub prefix_applied: &'static str,
     pub delete_one_title: &'static str,
-    pub delete_one_body: &'static str,
     pub expansion_deleted: &'static str,
     pub trigger_empty: &'static str,
     pub trigger_duplicate: &'static str,
@@ -370,9 +396,7 @@ pub struct Strings {
 pub static EN: Strings = Strings {
     app_title: "My text expansions",
     settings_button: "Settings",
-    tips_title: "Tips",
     tips_button_tip: "Tips",
-    tips_footer: "Nothing here is required reading. It is the handful of things people ask about most.",
     tip_search_title: "Find an expansion without leaving what you are doing",
     tip_search_body: "Press {keys} anywhere in Windows and a search box appears. Type part of a trigger or part of its text, pick one, and it is inserted where your cursor was.",
     onboarding_title: "Welcome",
@@ -397,8 +421,6 @@ pub static EN: Strings = Strings {
     tip_undo_body: "Press Esc, once, right after it happens. The expansion is undone and your text is left as you typed it.",
     tip_pause_title: "Pause it when it is in the way",
     tip_pause_body: "Right-click the tray icon: pause for ten minutes, or pause until you say otherwise. Useful when you are typing something your triggers would interfere with — a password field, a piece of code.",
-    tip_select_title: "Work on several at once",
-    tip_select_body: "In the list, hold Ctrl to pick expansions one by one, or Shift to take a whole run of them. You can then delete them, or take them out of their folder, in one go.",
     new_expansion: "New expansion",
     search_label: "Search expansions",
     empty_title: "You don't have any text expansions yet.",
@@ -415,22 +437,17 @@ pub static EN: Strings = Strings {
     edit_tip: "Edit",
     delete: "Delete",
     delete_tip: "Delete",
-    rename_folder_tip: "Rename folder",
-    delete_folder_tip: "Delete folder",
-    save_name_tip: "Save name",
     cancel: "Cancel",
-    cancel_tip: "Cancel",
     selected_count: "{n} selected",
     remove_from_folder: "Take out of folder",
     delete_selected: "Delete selected",
-    clear_selection_tip: "Clear selection",
     moving_n: "Moving {n} expansions",
 
     confirm_delete_folder_title: "Delete folder \"{name}\"",
-    confirm_delete_folder_body: "You are about to delete the folder \"{name}\", which contains {n} expansion(s). Continuing will delete ALL expansions in this folder. This cannot be undone.",
-    confirm_delete_selection_title: "Delete {n} expansion(s)",
-    confirm_delete_selection_body: "You are about to delete {n} selected expansion(s). This cannot be undone.",
-    see_more: "See more ({n} more)",
+    confirm_delete_folder_body: "You are about to delete the folder \"{name}\" and everything inside it:",
+    confirm_delete_selection_title: "Delete {n} expansions",
+    confirm_delete_undo: "This cannot be undone.",
+    see_more: "Show {n} more",
 
     edit_title_new: "New text expansion",
     edit_title_existing: "Edit text expansion",
@@ -492,6 +509,15 @@ pub static EN: Strings = Strings {
     import_none_added: "Nothing was added: every trigger in that file is already in use.",
     import_not_ours: "That file does not look like an EspansoManager export.",
     import_error: "The file could not be read: {err}",
+    transfer_pick_export_title: "Which folders do you want to export?",
+    transfer_pick_import_title: "Which folders do you want to import?",
+    transfer_pick_hint: "Click a folder to include it or leave it out.",
+    transfer_pick_all: "All",
+    transfer_pick_none: "None",
+    transfer_pick_export_total: "{n} expansion will be exported.|{n} expansions will be exported.",
+    transfer_pick_import_total: "{n} expansion will be added.|{n} expansions will be added.",
+    transfer_pick_export_go: "Export…",
+    transfer_pick_import_go: "Import",
     prefix_section: "Prefix for new expansions",
     prefix_hint: "The prefix is what you type before each trigger, for example \":\" in \":hello\". Pick the one you prefer.",
     custom_label: "Custom:",
@@ -511,22 +537,21 @@ pub static EN: Strings = Strings {
     prefix_already_applied: "All your expansions already use this prefix.",
     prefix_collision: "The change was not applied: at least two expansions would end up with the same trigger ({list}). Please review them before changing the prefix.",
     prefix_confirm_title: "Change the prefix of existing expansions",
-    prefix_confirm_body: "{n} trigger(s) will be renamed:\n\n{list}{more}\n\nContinue?",
+    prefix_confirm_body: "{n} trigger will be renamed:\n\n{list}{more}\n\nContinue?|{n} triggers will be renamed:\n\n{list}{more}\n\nContinue?",
     prefix_confirm_more: "\n  … and {n} more",
-    prefix_applied: "Updated the prefix of {n} expansion(s).",
+    prefix_applied: "Updated the prefix of {n} expansion.|Updated the prefix of {n} expansions.",
     delete_one_title: "Delete expansion",
-    delete_one_body: "Delete the expansion \"{name}\"? This cannot be undone.",
     expansion_deleted: "Expansion deleted.",
     trigger_empty: "The trigger cannot be empty.",
     trigger_duplicate: "Another expansion already uses the trigger \"{name}\".",
     trigger_shadow: "\"{short}\" fires the moment you type it, so \"{long}\" would never work.",
     expansion_saved: "Expansion saved.",
-    folder_deleted: "Deleted the folder \"{name}\" and its {n} expansion(s).",
-    selection_deleted: "Deleted {n} expansion(s).",
+    folder_deleted: "Deleted the folder \"{name}\", which was empty.|Deleted the folder \"{name}\" and its expansion.|Deleted the folder \"{name}\" and its {n} expansions.",
+    selection_deleted: "Deleted {n} expansion.|Deleted {n} expansions.",
     folder_name_taken: "A folder named \"{name}\" already exists.",
     folder_renamed: "Folder renamed to \"{name}\".",
-    moved_to_folder: "{n} expansion(s) moved to \"{name}\".",
-    removed_from_folder: "{n} expansion(s) taken out of their folder.",
+    moved_to_folder: "{n} expansion moved to \"{name}\".|{n} expansions moved to \"{name}\".",
+    removed_from_folder: "{n} expansion taken out of its folder.|{n} expansions taken out of their folder.",
 
     preview_date: "Date/time — e.g. {example}",
     preview_advanced_vars: "Advanced (uses special variables) — edit it in the .yml file",
@@ -574,9 +599,7 @@ pub static EN: Strings = Strings {
 pub static ES: Strings = Strings {
     app_title: "Mis expansiones de texto",
     settings_button: "Ajustes",
-    tips_title: "Consejos",
     tips_button_tip: "Consejos",
-    tips_footer: "Nada de esto es obligatorio. Son las cosas que más se preguntan.",
     tip_search_title: "Busca una expansión sin salir de lo que estás haciendo",
     tip_search_body: "Presiona {keys} en cualquier parte de Windows y aparece un buscador. Escribe parte del activador o parte de su texto, elige una, y se inserta donde estaba tu cursor.",
     onboarding_title: "Te damos la bienvenida",
@@ -601,8 +624,6 @@ pub static ES: Strings = Strings {
     tip_undo_body: "Presiona Esc una vez, justo después. La expansión se deshace y tu texto queda tal como lo escribiste.",
     tip_pause_title: "Pausa cuando estorbe",
     tip_pause_body: "Clic derecho en el icono de la bandeja: pausa diez minutos, o pausa hasta que tú digas. Sirve cuando escribes algo donde tus atajos estorbarían — una contraseña, un pedazo de código.",
-    tip_select_title: "Trabaja con varias a la vez",
-    tip_select_body: "En la lista, mantén Ctrl para elegirlas una por una, o Shift para tomar un tramo entero. Luego puedes borrarlas, o sacarlas de su carpeta, de un solo golpe.",
     new_expansion: "Nueva expansión",
     search_label: "Buscar expansiones",
     empty_title: "Aún no tienes ninguna expansión de texto.",
@@ -619,22 +640,17 @@ pub static ES: Strings = Strings {
     edit_tip: "Editar",
     delete: "Eliminar",
     delete_tip: "Eliminar",
-    rename_folder_tip: "Renombrar carpeta",
-    delete_folder_tip: "Eliminar carpeta",
-    save_name_tip: "Guardar nombre",
     cancel: "Cancelar",
-    cancel_tip: "Cancelar",
-    selected_count: "{n} seleccionada(s)",
+    selected_count: "Seleccionadas: {n}",
     remove_from_folder: "Quitar de su carpeta",
     delete_selected: "Eliminar seleccionadas",
-    clear_selection_tip: "Cancelar selección",
     moving_n: "Moviendo {n} expansiones",
 
     confirm_delete_folder_title: "Eliminar carpeta \"{name}\"",
-    confirm_delete_folder_body: "Vas a eliminar la carpeta \"{name}\", que incluye {n} expansión(es). Continuar eliminará TODAS las expansiones de esta carpeta. Esta acción no se puede deshacer.",
-    confirm_delete_selection_title: "Eliminar {n} expansión(es)",
-    confirm_delete_selection_body: "Vas a eliminar {n} expansión(es) seleccionada(s). Esta acción no se puede deshacer.",
-    see_more: "Ver más ({n} más)",
+    confirm_delete_folder_body: "Vas a eliminar la carpeta \"{name}\" y todo lo que contiene:",
+    confirm_delete_selection_title: "Eliminar {n} expansiones",
+    confirm_delete_undo: "Esta acción no se puede deshacer.",
+    see_more: "Ver {n} más",
 
     edit_title_new: "Nueva expansión de texto",
     edit_title_existing: "Editar expansión de texto",
@@ -696,6 +712,15 @@ pub static ES: Strings = Strings {
     import_none_added: "No se añadió nada: todos los activadores de ese archivo ya están en uso.",
     import_not_ours: "Ese archivo no parece una exportación de EspansoManager.",
     import_error: "No se pudo leer el archivo: {err}",
+    transfer_pick_export_title: "¿Qué carpetas quieres exportar?",
+    transfer_pick_import_title: "¿Qué carpetas quieres importar?",
+    transfer_pick_hint: "Toca una carpeta para incluirla o dejarla fuera.",
+    transfer_pick_all: "Todas",
+    transfer_pick_none: "Ninguna",
+    transfer_pick_export_total: "Se exportará {n} expansión.|Se exportarán {n} expansiones.",
+    transfer_pick_import_total: "Se añadirá {n} expansión.|Se añadirán {n} expansiones.",
+    transfer_pick_export_go: "Exportar…",
+    transfer_pick_import_go: "Importar",
     prefix_section: "Prefijo para nuevas expansiones",
     prefix_hint: "El prefijo es el texto que escribes antes de cada activador, por ejemplo \":\" en \":hola\". Elige el que prefieras.",
     custom_label: "Personalizado:",
@@ -715,22 +740,21 @@ pub static ES: Strings = Strings {
     prefix_already_applied: "Todas tus expansiones ya usan este prefijo.",
     prefix_collision: "No se aplicó el cambio: al menos dos expansiones terminarían con el mismo activador ({list}). Revísalas manualmente antes de cambiar el prefijo.",
     prefix_confirm_title: "Cambiar prefijo de expansiones existentes",
-    prefix_confirm_body: "Se van a renombrar {n} activador(es):\n\n{list}{more}\n\n¿Continuar?",
+    prefix_confirm_body: "Se va a renombrar {n} activador:\n\n{list}{more}\n\n¿Continuar?|Se van a renombrar {n} activadores:\n\n{list}{more}\n\n¿Continuar?",
     prefix_confirm_more: "\n  … y {n} más",
-    prefix_applied: "Se actualizó el prefijo de {n} expansión(es).",
+    prefix_applied: "Se actualizó el prefijo de {n} expansión.|Se actualizó el prefijo de {n} expansiones.",
     delete_one_title: "Eliminar expansión",
-    delete_one_body: "¿Eliminar la expansión \"{name}\"? Esta acción no se puede deshacer.",
     expansion_deleted: "Expansión eliminada.",
     trigger_empty: "El activador no puede estar vacío.",
     trigger_duplicate: "Ya existe otra expansión con el activador \"{name}\".",
     trigger_shadow: "\"{short}\" se activa apenas lo escribes, así que \"{long}\" nunca funcionaría.",
     expansion_saved: "Expansión guardada.",
-    folder_deleted: "Se eliminó la carpeta \"{name}\" y sus {n} expansión(es).",
-    selection_deleted: "Se eliminaron {n} expansión(es).",
+    folder_deleted: "Se eliminó la carpeta \"{name}\", que estaba vacía.|Se eliminó la carpeta \"{name}\" y su expansión.|Se eliminó la carpeta \"{name}\" y sus {n} expansiones.",
+    selection_deleted: "Se eliminó {n} expansión.|Se eliminaron {n} expansiones.",
     folder_name_taken: "Ya existe una carpeta llamada \"{name}\".",
     folder_renamed: "Carpeta renombrada a \"{name}\".",
-    moved_to_folder: "{n} expansión(es) movida(s) a \"{name}\".",
-    removed_from_folder: "{n} expansión(es) quitada(s) de su carpeta.",
+    moved_to_folder: "{n} expansión movida a \"{name}\".|{n} expansiones movidas a \"{name}\".",
+    removed_from_folder: "{n} expansión quitada de su carpeta.|{n} expansiones quitadas de su carpeta.",
 
     preview_date: "Fecha/hora — ej. {example}",
     preview_advanced_vars: "Avanzado (usa variables especiales) — edítalo en el archivo .yml",
@@ -778,9 +802,7 @@ pub static ES: Strings = Strings {
 pub static FIL: Strings = Strings {
     app_title: "Aking mga text expansion",
     settings_button: "Mga setting",
-    tips_title: "Mga tip",
     tips_button_tip: "Mga tip",
-    tips_footer: "Walang kailangang basahin dito. Ito ang mga bagay na madalas itanong.",
     tip_search_title: "Maghanap ng expansion nang hindi umaalis sa ginagawa mo",
     tip_search_body: "Pindutin ang {keys} kahit saan sa Windows at lilitaw ang isang search box. I-type ang bahagi ng trigger o ng teksto nito, pumili, at ipapasok ito kung nasaan ang cursor mo.",
     onboarding_title: "Maligayang pagdating",
@@ -805,8 +827,6 @@ pub static FIL: Strings = Strings {
     tip_undo_body: "Pindutin ang Esc, isang beses, agad pagkatapos. Mababawi ang expansion at mananatili ang teksto mo gaya ng pagkakasulat mo.",
     tip_pause_title: "I-pause kapag nakakaabala",
     tip_pause_body: "I-right-click ang tray icon: i-pause nang sampung minuto, o i-pause hanggang sabihin mo. Kapaki-pakinabang kapag may tinitipa kang makakasagabal sa mga trigger mo — isang password, isang piraso ng code.",
-    tip_select_title: "Maraming expansion nang sabay",
-    tip_select_body: "Sa listahan, pindutin nang matagal ang Ctrl para pumili isa-isa, o Shift para kunin ang buong hanay. Pagkatapos ay maaari mong burahin ang mga ito, o alisin sa folder nila, nang sabay-sabay.",
     new_expansion: "Bagong expansion",
     search_label: "Maghanap ng expansion",
     empty_title: "Wala ka pang anumang text expansion.",
@@ -823,22 +843,17 @@ pub static FIL: Strings = Strings {
     edit_tip: "I-edit",
     delete: "Burahin",
     delete_tip: "Burahin",
-    rename_folder_tip: "Palitan ang pangalan ng folder",
-    delete_folder_tip: "Burahin ang folder",
-    save_name_tip: "I-save ang pangalan",
     cancel: "Kanselahin",
-    cancel_tip: "Kanselahin",
     selected_count: "{n} ang napili",
     remove_from_folder: "Ilabas sa folder",
     delete_selected: "Burahin ang mga napili",
-    clear_selection_tip: "Alisin ang pagpili",
     moving_n: "Inililipat ang {n} na expansion",
 
     confirm_delete_folder_title: "Burahin ang folder na \"{name}\"",
-    confirm_delete_folder_body: "Buburahin mo ang folder na \"{name}\", na naglalaman ng {n} expansion. Kapag nagpatuloy ka, mabubura ANG LAHAT ng expansion sa folder na ito. Hindi ito maaaring bawiin.",
+    confirm_delete_folder_body: "Buburahin mo ang folder na \"{name}\" at ang lahat ng nasa loob nito:",
     confirm_delete_selection_title: "Burahin ang {n} expansion",
-    confirm_delete_selection_body: "Buburahin mo ang {n} napiling expansion. Hindi ito maaaring bawiin.",
-    see_more: "Tingnan pa ({n} pa)",
+    confirm_delete_undo: "Hindi ito maaaring bawiin.",
+    see_more: "Ipakita ang {n} pa",
 
     edit_title_new: "Bagong text expansion",
     edit_title_existing: "I-edit ang text expansion",
@@ -900,6 +915,15 @@ pub static FIL: Strings = Strings {
     import_none_added: "Walang naidagdag: ginagamit na ang lahat ng trigger sa file na iyon.",
     import_not_ours: "Mukhang hindi ito isang export ng EspansoManager.",
     import_error: "Hindi mabasa ang file: {err}",
+    transfer_pick_export_title: "Aling mga folder ang gusto mong i-export?",
+    transfer_pick_import_title: "Aling mga folder ang gusto mong i-import?",
+    transfer_pick_hint: "Pindutin ang isang folder para isama o iwanan.",
+    transfer_pick_all: "Lahat",
+    transfer_pick_none: "Wala",
+    transfer_pick_export_total: "{n} expansion ang i-export.|{n} expansion ang i-export.",
+    transfer_pick_import_total: "{n} expansion ang idadagdag.|{n} expansion ang idadagdag.",
+    transfer_pick_export_go: "I-export…",
+    transfer_pick_import_go: "I-import",
     prefix_section: "Prefix para sa mga bagong expansion",
     prefix_hint: "Ang prefix ang tine-type mo bago ang bawat trigger, halimbawa \":\" sa \":kumusta\". Piliin ang gusto mo.",
     custom_label: "Pasadya:",
@@ -919,22 +943,21 @@ pub static FIL: Strings = Strings {
     prefix_already_applied: "Ginagamit na ng lahat ng iyong expansion ang prefix na ito.",
     prefix_collision: "Hindi inilapat ang pagbabago: hindi bababa sa dalawang expansion ang magkakaroon ng parehong trigger ({list}). Pakisuri muna ang mga ito bago palitan ang prefix.",
     prefix_confirm_title: "Palitan ang prefix ng mga umiiral na expansion",
-    prefix_confirm_body: "Papalitan ang pangalan ng {n} trigger:\n\n{list}{more}\n\nMagpatuloy?",
+    prefix_confirm_body: "Papalitan ang pangalan ng {n} trigger:\n\n{list}{more}\n\nMagpatuloy?|Papalitan ang pangalan ng {n} trigger:\n\n{list}{more}\n\nMagpatuloy?",
     prefix_confirm_more: "\n  … at {n} pa",
-    prefix_applied: "Na-update ang prefix ng {n} expansion.",
+    prefix_applied: "Na-update ang prefix ng {n} expansion.|Na-update ang prefix ng {n} expansion.",
     delete_one_title: "Burahin ang expansion",
-    delete_one_body: "Burahin ang expansion na \"{name}\"? Hindi ito maaaring bawiin.",
     expansion_deleted: "Nabura ang expansion.",
     trigger_empty: "Hindi maaaring walang laman ang trigger.",
     trigger_duplicate: "May ibang expansion na gumagamit na ng trigger na \"{name}\".",
     trigger_shadow: "Agad tumatakbo ang \"{short}\" pagkatapos mong i-type, kaya hindi kailanman gagana ang \"{long}\".",
     expansion_saved: "Na-save ang expansion.",
-    folder_deleted: "Nabura ang folder na \"{name}\" at ang {n} expansion nito.",
-    selection_deleted: "Nabura ang {n} expansion.",
+    folder_deleted: "Nabura ang folder na \"{name}\", na walang laman.|Nabura ang folder na \"{name}\" at ang expansion nito.|Nabura ang folder na \"{name}\" at ang {n} expansion nito.",
+    selection_deleted: "Nabura ang {n} expansion.|Nabura ang {n} expansion.",
     folder_name_taken: "May folder nang pinangalanang \"{name}\".",
     folder_renamed: "Pinalitan ang pangalan ng folder tungong \"{name}\".",
-    moved_to_folder: "{n} expansion ang inilipat sa \"{name}\".",
-    removed_from_folder: "{n} expansion ang inilabas sa kanilang folder.",
+    moved_to_folder: "{n} expansion ang inilipat sa \"{name}\".|{n} expansion ang inilipat sa \"{name}\".",
+    removed_from_folder: "{n} expansion ang inilabas sa folder nito.|{n} expansion ang inilabas sa kanilang folder.",
 
     preview_date: "Petsa/oras — hal. {example}",
     preview_advanced_vars: "Advanced (gumagamit ng espesyal na variable) — i-edit ito sa .yml file",
@@ -982,9 +1005,7 @@ pub static FIL: Strings = Strings {
 pub static HI: Strings = Strings {
     app_title: "मेरे टेक्स्ट विस्तार",
     settings_button: "सेटिंग्स",
-    tips_title: "सुझाव",
     tips_button_tip: "सुझाव",
-    tips_footer: "यहाँ कुछ भी पढ़ना ज़रूरी नहीं है। ये वही बातें हैं जो लोग सबसे ज़्यादा पूछते हैं।",
     tip_search_title: "जो कर रहे हैं उसे छोड़े बिना कोई एक्सपैंशन ढूँढें",
     tip_search_body: "Windows में कहीं भी {keys} दबाएँ और एक खोज बॉक्स आ जाएगा। ट्रिगर का या उसके टेक्स्ट का कुछ हिस्सा लिखें, एक चुनें, और वह वहीं जुड़ जाएगा जहाँ आपका कर्सर था।",
     onboarding_title: "आपका स्वागत है",
@@ -1009,8 +1030,6 @@ pub static HI: Strings = Strings {
     tip_undo_body: "तुरंत बाद एक बार Esc दबाएँ। एक्सपैंशन पलट जाएगा और आपका टेक्स्ट वैसा ही रहेगा जैसा आपने लिखा था।",
     tip_pause_title: "जब बाधा बने तो रोक दें",
     tip_pause_body: "ट्रे आइकन पर दायाँ क्लिक करें: दस मिनट के लिए रोकें, या जब तक आप न कहें तब तक रोकें। तब काम आता है जब आप कुछ ऐसा टाइप कर रहे हों जिसमें आपके ट्रिगर बाधा डालें — कोई पासवर्ड, कोई कोड।",
-    tip_select_title: "एक साथ कई पर काम करें",
-    tip_select_body: "सूची में, एक-एक चुनने के लिए Ctrl दबाए रखें, या पूरी श्रृंखला लेने के लिए Shift। फिर आप उन्हें एक ही बार में मिटा सकते हैं, या उनके फ़ोल्डर से बाहर निकाल सकते हैं।",
     new_expansion: "नया विस्तार",
     search_label: "एक्सपैंशन खोजें",
     empty_title: "आपके पास अभी कोई टेक्स्ट विस्तार नहीं है।",
@@ -1027,22 +1046,17 @@ pub static HI: Strings = Strings {
     edit_tip: "संपादित करें",
     delete: "हटाएँ",
     delete_tip: "हटाएँ",
-    rename_folder_tip: "फ़ोल्डर का नाम बदलें",
-    delete_folder_tip: "फ़ोल्डर हटाएँ",
-    save_name_tip: "नाम सहेजें",
     cancel: "रद्द करें",
-    cancel_tip: "रद्द करें",
     selected_count: "{n} चयनित",
     remove_from_folder: "फ़ोल्डर से बाहर निकालें",
     delete_selected: "चयनित हटाएँ",
-    clear_selection_tip: "चयन रद्द करें",
     moving_n: "{n} विस्तार ले जाए जा रहे हैं",
 
     confirm_delete_folder_title: "फ़ोल्डर \"{name}\" हटाएँ",
-    confirm_delete_folder_body: "आप फ़ोल्डर \"{name}\" हटाने जा रहे हैं, जिसमें {n} विस्तार हैं। आगे बढ़ने पर इस फ़ोल्डर के सभी विस्तार हट जाएँगे। यह क्रिया पूर्ववत नहीं की जा सकती।",
+    confirm_delete_folder_body: "आप फ़ोल्डर \"{name}\" और उसमें मौजूद सब कुछ हटाने जा रहे हैं:",
     confirm_delete_selection_title: "{n} विस्तार हटाएँ",
-    confirm_delete_selection_body: "आप {n} चयनित विस्तार हटाने जा रहे हैं। यह क्रिया पूर्ववत नहीं की जा सकती।",
-    see_more: "और देखें ({n} और)",
+    confirm_delete_undo: "यह क्रिया पूर्ववत नहीं की जा सकती।",
+    see_more: "{n} और दिखाएँ",
 
     edit_title_new: "नया टेक्स्ट विस्तार",
     edit_title_existing: "टेक्स्ट विस्तार संपादित करें",
@@ -1104,6 +1118,15 @@ pub static HI: Strings = Strings {
     import_none_added: "कुछ नहीं जोड़ा गया: उस फ़ाइल के सभी ट्रिगर पहले से उपयोग में हैं।",
     import_not_ours: "यह फ़ाइल EspansoManager का निर्यात नहीं लगती।",
     import_error: "फ़ाइल नहीं पढ़ी जा सकी: {err}",
+    transfer_pick_export_title: "आप कौन-से फ़ोल्डर निर्यात करना चाहते हैं?",
+    transfer_pick_import_title: "आप कौन-से फ़ोल्डर आयात करना चाहते हैं?",
+    transfer_pick_hint: "शामिल करने या छोड़ने के लिए फ़ोल्डर पर क्लिक करें।",
+    transfer_pick_all: "सभी",
+    transfer_pick_none: "कोई नहीं",
+    transfer_pick_export_total: "{n} विस्तार निर्यात किया जाएगा।|{n} विस्तार निर्यात किए जाएँगे।",
+    transfer_pick_import_total: "{n} विस्तार जोड़ा जाएगा।|{n} विस्तार जोड़े जाएँगे।",
+    transfer_pick_export_go: "निर्यात करें…",
+    transfer_pick_import_go: "आयात करें",
     prefix_section: "नए विस्तारों के लिए उपसर्ग",
     prefix_hint: "उपसर्ग वह है जो आप हर ट्रिगर से पहले टाइप करते हैं, जैसे \":नमस्ते\" में \":\"। अपनी पसंद का चुनें।",
     custom_label: "कस्टम:",
@@ -1123,22 +1146,21 @@ pub static HI: Strings = Strings {
     prefix_already_applied: "आपके सभी विस्तार पहले से ही इस उपसर्ग का उपयोग करते हैं।",
     prefix_collision: "परिवर्तन लागू नहीं किया गया: कम से कम दो विस्तारों का ट्रिगर एक जैसा हो जाएगा ({list})। उपसर्ग बदलने से पहले कृपया उनकी समीक्षा करें।",
     prefix_confirm_title: "मौजूदा विस्तारों का उपसर्ग बदलें",
-    prefix_confirm_body: "{n} ट्रिगर का नाम बदला जाएगा:\n\n{list}{more}\n\nजारी रखें?",
+    prefix_confirm_body: "{n} ट्रिगर का नाम बदला जाएगा:\n\n{list}{more}\n\nजारी रखें?|{n} ट्रिगरों के नाम बदले जाएँगे:\n\n{list}{more}\n\nजारी रखें?",
     prefix_confirm_more: "\n  … और {n} अधिक",
-    prefix_applied: "{n} विस्तार का उपसर्ग अपडेट किया गया।",
+    prefix_applied: "{n} विस्तार का उपसर्ग अपडेट किया गया।|{n} विस्तारों के उपसर्ग अपडेट किए गए।",
     delete_one_title: "विस्तार हटाएँ",
-    delete_one_body: "क्या विस्तार \"{name}\" हटाना है? यह क्रिया पूर्ववत नहीं की जा सकती।",
     expansion_deleted: "विस्तार हटा दिया गया।",
     trigger_empty: "ट्रिगर खाली नहीं हो सकता।",
     trigger_duplicate: "ट्रिगर \"{name}\" का उपयोग पहले से ही कोई अन्य विस्तार कर रहा है।",
     trigger_shadow: "\"{short}\" टाइप करते ही चल जाता है, इसलिए \"{long}\" कभी काम नहीं करेगा।",
     expansion_saved: "विस्तार सहेजा गया।",
-    folder_deleted: "फ़ोल्डर \"{name}\" और उसके {n} विस्तार हटा दिए गए।",
-    selection_deleted: "{n} विस्तार हटा दिए गए।",
+    folder_deleted: "फ़ोल्डर \"{name}\" हटा दिया गया, वह ख़ाली था।|फ़ोल्डर \"{name}\" और उसका विस्तार हटा दिया गया।|फ़ोल्डर \"{name}\" और उसके {n} विस्तार हटा दिए गए।",
+    selection_deleted: "{n} विस्तार हटा दिया गया।|{n} विस्तार हटा दिए गए।",
     folder_name_taken: "\"{name}\" नाम का फ़ोल्डर पहले से मौजूद है।",
     folder_renamed: "फ़ोल्डर का नाम बदलकर \"{name}\" कर दिया गया।",
-    moved_to_folder: "{n} विस्तार \"{name}\" में ले जाए गए।",
-    removed_from_folder: "{n} विस्तार उनके फ़ोल्डर से बाहर निकाले गए।",
+    moved_to_folder: "{n} विस्तार \"{name}\" में ले जाया गया।|{n} विस्तार \"{name}\" में ले जाए गए।",
+    removed_from_folder: "{n} विस्तार अपने फ़ोल्डर से बाहर निकाला गया।|{n} विस्तार अपने फ़ोल्डर से बाहर निकाले गए।",
 
     preview_date: "दिनांक/समय — जैसे {example}",
     preview_advanced_vars: "उन्नत (विशेष वेरिएबल का उपयोग करता है) — इसे .yml फ़ाइल में संपादित करें",
@@ -1225,15 +1247,29 @@ mod tests {
     /// Braces that are not placeholders are text like any other, including in scripts where a
     /// byte index is not a character index.
     #[test]
+    fn a_count_picks_its_own_form() {
+        let two = "{n} expansión movida a {name}.|{n} expansiones movidas a {name}.";
+        assert_eq!(fill_count(two, 1, &[("name", "A")]), "1 expansión movida a A.");
+        assert_eq!(fill_count(two, 3, &[("name", "A")]), "3 expansiones movidas a A.");
+        assert_eq!(fill_count(two, 0, &[("name", "A")]), "0 expansiones movidas a A.");
+        let three = "vacía|y su expansión|y sus {n} expansiones";
+        assert_eq!(fill_count(three, 0, &[]), "vacía");
+        assert_eq!(fill_count(three, 1, &[]), "y su expansión");
+        assert_eq!(fill_count(three, 7, &[]), "y sus 7 expansiones");
+        assert_eq!(fill_count("Añadidas: {n}.", 1, &[]), "Añadidas: 1.");
+    }
+
+    #[test]
     fn stray_braces_pass_through_untouched() {
         assert_eq!(fill("100% {sure", &[("sure", "x")]), "100% {sure");
         assert_eq!(fill("saldo }{ raro", &[]), "saldo }{ raro");
         assert_eq!(fill("ñandú {n} पूर्ण", &[("n", "2")]), "ñandú 2 पूर्ण");
     }
 
-    /// The `{token}`s in one line, sorted, ignoring anything that is not shaped like a placeholder.
+    /// The `{token}`s in one line, sorted, ignoring anything that is not shaped like a placeholder
+    /// — plus one `|` per form separator, so a language that dropped a plural form is caught too.
     fn placeholders(line: &'static str) -> Vec<&'static str> {
-        let mut found = Vec::new();
+        let mut found: Vec<&'static str> = line.matches('|').collect();
         let mut rest = line;
         while let Some(open) = rest.find('{') {
             let after = &rest[open + 1..];

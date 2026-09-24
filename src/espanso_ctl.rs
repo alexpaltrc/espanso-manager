@@ -61,6 +61,28 @@ pub struct CtlResult {
     pub stderr: String,
 }
 
+/// Only meaningful in the studio build: the three guards it checks exist only when `preview` is
+/// on. Compiled into the ordinary build it asserted a refusal nothing had promised, so the three
+/// calls really ran, really failed on a drive Z: that is not there, and `cargo test` came back red
+/// for every change anyone made anywhere — which is a broken alarm, not a test.
+#[cfg(all(test, feature = "preview"))]
+mod studio_tests {
+    use super::*;
+
+    #[test]
+    fn studio_refuses_processes_and_worker_pipe_before_touching_the_os() {
+        let ctl = EspansoCtl::new(PathBuf::from("Z:/must-never-run/espansod.exe"));
+        let t = crate::settings::Settings::default().t();
+        for result in [
+            ctl.run(&["service", "stop"], t).map(|_| ()),
+            ctl.spawn_detached(&["service", "start"]),
+            ctl.request_expansion(":do-not-type"),
+        ] {
+            assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::Unsupported);
+        }
+    }
+}
+
 impl CtlResult {
     /// The technical detail worth showing (collapsed) alongside a friendly error banner.
     pub fn detail(&self) -> String {
@@ -120,6 +142,7 @@ impl EspansoCtl {
         deadline: Instant,
         t: &'static Strings,
     ) -> std::io::Result<CtlResult> {
+        if crate::EXPERIMENTAL { return Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "Studio: engine commands are disabled")); }
         let mut child = Command::new(&self.exe_path)
             .args(args)
             // The portable daemon locates its `.espanso`/`.espanso-runtime` folders relative to
@@ -198,6 +221,7 @@ impl EspansoCtl {
 
     /// Launches an espansod subcommand detached, without waiting for it to exit.
     fn spawn_detached(&self, args: &[&str]) -> std::io::Result<()> {
+        if crate::EXPERIMENTAL { return Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "Studio: process launch is disabled")); }
         Command::new(&self.exe_path)
             .args(args)
             .current_dir(self.working_dir())
@@ -257,6 +281,7 @@ impl EspansoCtl {
     }
 
     fn request_expansion(&self, trigger: &str) -> std::io::Result<()> {
+        if crate::EXPERIMENTAL { return Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "Studio: worker IPC is disabled")); }
         use std::io::Write;
 
         let event = serde_json::json!({
@@ -360,6 +385,7 @@ impl EspansoCtl {
     /// Best-effort startup sequence: make sure the daemon is actually running. Never panics;
     /// returns the last failing step's detail so the caller can show a friendly banner.
     pub fn ensure_running(&self, t: &'static Strings) -> Result<(), String> {
+        if crate::EXPERIMENTAL { return Ok(()); }
         if !self.exe_exists() {
             return Err(fill(
                 t.err_espansod_missing,
@@ -409,6 +435,7 @@ impl EspansoCtl {
         timeout: Duration,
         t: &'static Strings,
     ) -> Result<(), String> {
+        if crate::EXPERIMENTAL { return Ok(()); }
         let _ = self.spawn_detached(&["service", "restart"]);
         // Mid-restart, `service status` may briefly report "not running" — give it a beat before
         // polling.

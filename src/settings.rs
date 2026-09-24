@@ -51,6 +51,18 @@ pub struct Settings {
     /// Optional folder grouping, entirely our own bookkeeping — never written into espanso's own
     /// YAML — keyed by the match's current trigger.
     pub folder_by_trigger: BTreeMap<String, String>,
+    /// Folders that exist because somebody made them, rather than because something is filed in
+    /// them.
+    ///
+    /// Without this a folder is only the *value* of an assignment, so an empty one cannot be said
+    /// to exist at all: "Crear carpeta" would make a name that vanished the instant the modal
+    /// closed, and moving the last expansion out of a folder would silently destroy it. Both are
+    /// things the interface promises not to do. A name is in here from the moment it is created
+    /// until the moment the folder is deleted; [`all_folder_names`](Settings::all_folder_names)
+    /// returns the union, so nothing that reads folder names has to know which kind it is looking
+    /// at. An older settings file simply has none, which reads back as "every folder is derived" —
+    /// exactly how it behaved before.
+    pub folders: BTreeSet<String>,
     /// Renders the list as short single-line rows instead of two-line cards.
     pub compact_view: bool,
     /// Interface language. Independent of the expansions themselves, which are never translated.
@@ -70,6 +82,7 @@ impl Default for Settings {
             window_pos: None,
             window_size: None,
             folder_by_trigger: BTreeMap::new(),
+            folders: BTreeSet::new(),
             compact_view: false,
             lang: Lang::default(),
             theme_mode: ThemeMode::default(),
@@ -87,7 +100,17 @@ impl Settings {
         self.folder_by_trigger.get(trigger).map(|s| s.as_str())
     }
 
+    /// Files `trigger` under `folder`, or under none. The folder it leaves is declared first.
+    ///
+    /// A folder made by an import or by typing a new name in the editor exists only through its
+    /// assignments. Moving the last expansion out of one would then make the folder itself vanish,
+    /// and the library's filter with it: a reorganisation deleting a folder nobody asked to delete.
+    /// Declared, it stays as the empty folder it now is, exactly like one made with "+ Nueva
+    /// carpeta". Renames and prefix changes rewrite the map directly and do not come through here.
     pub fn set_folder(&mut self, trigger: &str, folder: Option<String>) {
+        if let Some(left) = self.folder_by_trigger.get(trigger) {
+            self.folders.insert(left.clone());
+        }
         match folder.filter(|f| !f.trim().is_empty()) {
             Some(f) => {
                 self.folder_by_trigger.insert(trigger.to_string(), f.trim().to_string());
@@ -132,9 +155,33 @@ impl Settings {
         before - self.folder_by_trigger.len()
     }
 
+    /// Every folder there is: the ones somebody made, plus the ones implied by an assignment.
+    ///
+    /// The union rather than either half. `folders` alone would lose the folders of a settings file
+    /// written before it existed, and the assignments alone would lose every empty folder — and an
+    /// empty folder is a perfectly ordinary thing to have five seconds after making one.
     pub fn all_folder_names(&self) -> Vec<String> {
-        let set: BTreeSet<&String> = self.folder_by_trigger.values().collect();
-        set.into_iter().cloned().collect()
+        let mut set: BTreeSet<&str> = self.folder_by_trigger.values().map(String::as_str).collect();
+        set.extend(self.folders.iter().map(String::as_str));
+        set.into_iter().map(str::to_owned).collect()
+    }
+
+    /// Declares a folder, whether or not anything is in it yet. Returns `false` if that name was
+    /// already taken, which is what the create dialog reports rather than silently merging two.
+    pub fn create_folder(&mut self, name: &str) -> bool {
+        let name = name.trim();
+        if name.is_empty() || self.all_folder_names().iter().any(|f| f == name) {
+            return false;
+        }
+        self.folders.insert(name.to_owned());
+        true
+    }
+
+    /// Forgets a folder's *declaration*. The assignments pointing at it are the caller's business:
+    /// deleting a folder in this app deletes its expansions, and that is [`crate::app::AppState`]'s
+    /// decision to carry out, not this file's.
+    pub fn forget_folder(&mut self, name: &str) {
+        self.folders.remove(name);
     }
 }
 
@@ -267,6 +314,18 @@ mod tests {
                 .insert(trigger.to_string(), folder.to_string());
         }
         s
+    }
+
+    /// Moving the last expansion out of a folder that existed only through its assignments empties
+    /// the folder; it does not delete it.
+    #[test]
+    fn moving_out_the_last_expansion_keeps_the_folder() {
+        let mut s = settings_with(&[(":uno", "Importada")]);
+        s.set_folder(":uno", Some("Otra".into()));
+        assert_eq!(s.all_folder_names(), vec!["Importada".to_string(), "Otra".to_string()]);
+        s.set_folder(":uno", None);
+        assert_eq!(s.all_folder_names(), vec!["Importada".to_string(), "Otra".to_string()]);
+        assert_eq!(s.folder_of(":uno"), None);
     }
 
     /// The case that put this here: a match deleted by hand in `base.yml` leaves an assignment

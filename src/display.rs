@@ -123,8 +123,12 @@ pub fn text_scale(work_height_points: f32) -> f32 {
 ///
 /// Shared with `main.rs` so the builder and the on-show repair agree; a minimum enforced in one
 /// place and ignored in the other is how a window ends up too small to use.
-pub const DEFAULT_SIZE: [f32; 2] = [900.0, 720.0];
-pub const MIN_SIZE: [f32; 2] = [620.0, 480.0];
+///
+/// The minimum height is the library's: its title, search, a wrapped second row of folder chips,
+/// one row of the list and the footer, measured on the built window. At 480 the chips' second row
+/// was enough to push the footer off the bottom.
+pub const DEFAULT_SIZE: [f32; 2] = [1180.0, 780.0];
+pub const MIN_SIZE: [f32; 2] = [620.0, 540.0];
 
 /// The work area of the monitor a given window is actually on.
 ///
@@ -277,5 +281,80 @@ pub fn bring_to_front(hwnd: windows::Win32::Foundation::HWND) {
         if borrowed {
             let _ = AttachThreadInput(theirs, ours, false);
         }
+    }
+}
+
+/// Hands the keyboard back to `hwnd` when Windows has left this thread holding no focus at all.
+///
+/// This is the repair for a bug that was reported as "the text box deselects itself and then I
+/// cannot type anything". Measured on the running app, the broken state is exactly this: the window
+/// is visible, foreground *and* active, and `GetFocus()` for its thread returns nothing. egui keeps
+/// its own idea of which widget is focused right through it, so the box is still the one that would
+/// receive the text — but egui only paints the caret while the viewport has the focus, so the box
+/// stops looking selected, and there is no keyboard focus for the typing to arrive on anyway.
+///
+/// The part that makes it maddening rather than merely odd is that clicking does not undo it.
+/// Windows assigns the focus when a window is *activated*, and ours is already the active window,
+/// so no amount of clicking inside it ever produces another activation. Hiding the window to the
+/// tray and opening it again does produce one, which is how the workaround was found before the
+/// cause was.
+///
+/// So this asks Windows once per frame what its own view of the focus is, and puts it back when it
+/// has gone missing. `GetGUIThreadInfo` is the only call that answers honestly here — `GetFocus`
+/// alone cannot tell "nobody has it" apart from "a menu has it", and those two must not be treated
+/// the same.
+///
+/// Returns whether it had to step in, which is nothing the app acts on: it is there so the fix can
+/// be measured rather than assumed.
+pub fn restore_keyboard_focus(hwnd: windows::Win32::Foundation::HWND) -> bool {
+    use windows::Win32::System::Threading::GetCurrentThreadId;
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetFocus, SetFocus};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetGUIThreadInfo, GUITHREADINFO, GUI_INMENUMODE, GUI_POPUPMENUMODE, GUI_SYSTEMMENUMODE,
+    };
+
+    if hwnd.is_invalid() {
+        return false;
+    }
+
+    let mut info = GUITHREADINFO {
+        cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+        ..Default::default()
+    };
+    // Only ever about our own thread. Asking about somebody else's would be both rude and useless:
+    // the focus is per-thread, and the one that is broken is ours.
+    if unsafe { GetGUIThreadInfo(GetCurrentThreadId(), &mut info) }.is_err() {
+        return false;
+    }
+
+    // Three states where Windows has parked the focus deliberately and taking it back would break
+    // something the person is in the middle of: a menu is open (the window's own system menu counts,
+    // and it is on this thread), the window is being dragged or resized, or the mouse is captured —
+    // which it is for the whole time a button is held down, so this also keeps the repair out of
+    // the middle of a drag in the list.
+    if info.flags.contains(GUI_INMENUMODE)
+        || info.flags.contains(GUI_SYSTEMMENUMODE)
+        || info.flags.contains(GUI_POPUPMENUMODE)
+        || !info.hwndMenuOwner.is_invalid()
+        || !info.hwndMoveSize.is_invalid()
+        || !info.hwndCapture.is_invalid()
+    {
+        return false;
+    }
+
+    // Nothing but the broken shape is touched. `hwndFocus` already pointing somewhere means the
+    // keyboard has an owner and it is not our business which; `hwndActive` not being our window
+    // means we are not the one being typed into, so putting the focus here would be taking it.
+    if info.hwndActive != hwnd || !info.hwndFocus.is_invalid() {
+        return false;
+    }
+
+    unsafe {
+        // `SetFocus` returns whichever window *used* to hold the focus, and windows-rs turns a null
+        // one into `Err` — which is precisely the case every single time this runs, since having
+        // nothing focused is the reason we are here. So the result says nothing about whether it
+        // worked; the only honest check is to ask again.
+        let _ = SetFocus(Some(hwnd));
+        GetFocus() == hwnd
     }
 }

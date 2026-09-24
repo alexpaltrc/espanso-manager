@@ -17,7 +17,7 @@
  * along with EspansoManager.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-//! Stamps the Windows version resource onto the executable. That is all this does.
+//! Stamps Windows version metadata and the multi-size application icon onto the executable.
 //!
 //! Without it the binary reports **nothing** — no company, no product, no description, no
 //! version. Measured on the 0.0.1 build: every one of those fields came back empty, while
@@ -35,6 +35,7 @@
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=assets/EspansoManager.ico");
 
     // The crate is Windows-only, but a build script still runs wherever cargo runs.
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
@@ -42,6 +43,7 @@ fn main() {
     }
 
     let mut res = winresource::WindowsResource::new();
+    res.set_icon("assets/EspansoManager.ico");
 
     // Set explicitly rather than left to default: winresource would otherwise take the crate
     // name, `espanso_manager`, which is not what this program is called anywhere a user looks.
@@ -59,7 +61,7 @@ fn main() {
     // fails in ways that are tedious to diagnose for text nobody reads closely.
     //
     // FileVersion and ProductVersion are deliberately NOT set here. winresource derives both
-    // from `version` in Cargo.toml, so 0.0.1 keeps living in exactly one place.
+    // from `version` in Cargo.toml, so the version number keeps living in exactly one place.
 
     if let Err(e) = res.compile() {
         println!("cargo:warning=version resource not embedded ({e}). The build is fine and the app will run, but the exe will report no company, product or version. This needs rc.exe from the Windows SDK.");

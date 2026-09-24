@@ -21,8 +21,10 @@
 //! none of them touches a file. See the note on neighbourhood 1 in [`crate::app`].
 
 pub mod controls;
+pub mod studio;
 pub mod date_blocks;
 pub mod edit_form;
+pub mod folder_view;
 pub mod list_view;
 pub mod onboarding_view;
 pub mod search_view;

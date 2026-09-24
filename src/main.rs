@@ -36,6 +36,9 @@
 //! somewhere to put them.
 
 
+/// This build is an isolated UI studio: no daemon commands or global autostart writes.
+pub const EXPERIMENTAL: bool = cfg!(feature = "preview");
+
 mod app;
 mod autostart;
 mod config_patch;
@@ -43,8 +46,10 @@ mod datefmt;
 mod display;
 mod espanso_ctl;
 mod fonts;
+mod folders;
 mod hotkey;
 mod i18n;
+mod icons;
 mod settings;
 mod sysevents;
 mod theme;
@@ -90,7 +95,7 @@ enum InstanceGuard {
 /// double-clicks the exe), which would otherwise create two tray icons. We deliberately don't try
 /// to "wake up" the other instance's window — just tell the user where it already is.
 fn acquire_single_instance_guard(t: &'static i18n::Strings) -> InstanceGuard {
-    let name = wide("Local\\EspansoManager-SingleInstance-9f3d2b7a");
+    let name = wide(if EXPERIMENTAL { "Local\\EspansoManager-Studio-SingleInstance-20260909" } else { "Local\\EspansoManager-SingleInstance-9f3d2b7a" });
     // Reading the thread's last error straight afterwards is sound: on the success path nothing
     // in between touches it. `CreateMutexW` builds its error lazily, with
     // `.ok_or_else(Error::from_thread)`, so ERROR_ALREADY_EXISTS is still there to be read.
@@ -224,11 +229,15 @@ fn main() {
     let espansod_path = base_dir.join("espansod.exe");
     let ctl = EspansoCtl::new(espansod_path);
 
-    silence_espanso_wizard(&ctl, t, &base_dir.join(".espanso-runtime"));
+    if !EXPERIMENTAL { silence_espanso_wizard(&ctl, t, &base_dir.join(".espanso-runtime")); }
 
-    if let Err(e) = ctl.ensure_running(t) {
-        startup_warnings.push(i18n::fill(t.startup_espanso_warning, &[("err", &e)]));
-    }
+    let mut espanso_confirmed = match ctl.ensure_running(t) {
+        Ok(()) => true,
+        Err(e) => {
+            startup_warnings.push(i18n::fill(t.startup_espanso_warning, &[("err", &e)]));
+            false
+        }
+    };
 
     let config_path = base_dir.join(".espanso").join("config").join("default.yml");
 
@@ -263,8 +272,7 @@ fn main() {
 
     let backups_dir = manager_dir.join("backups");
 
-    let runtime_dir = base_dir.join(".espanso-runtime");
-    let tray = match tray::Tray::new(&runtime_dir, t) {
+    let tray = match tray::Tray::new(t) {
         Ok(tray) => tray,
         Err(e) => {
             // Leaving is fine. Leaving *quietly* is not: espanso is already running by now, and on
@@ -309,7 +317,7 @@ fn main() {
     // the setting is already in the file from last time — is what the restore above is for.
     match config_patch::ensure_managed_settings(&config_path) {
         Ok(true) => {
-            let _ = ctl.restart_and_confirm(std::time::Duration::from_secs(6), t);
+            espanso_confirmed = ctl.restart_and_confirm(std::time::Duration::from_secs(6), t).is_ok();
         }
         Ok(false) => {}
         // Not fatal — the app runs fine, espanso just keeps an icon and a set of toasts we meant
@@ -322,9 +330,7 @@ fn main() {
     // the one banner instead of needing a second place to appear.
     let startup_warning = (!startup_warnings.is_empty()).then(|| startup_warnings.join("\n\n"));
 
-    let icon = std::fs::read(runtime_dir.join("icon_no_backgroundv2.png"))
-        .ok()
-        .and_then(|bytes| eframe::icon_data::from_png_bytes(&bytes).ok());
+    let icon = icons::window_fallback();
 
     // Never larger than the screen it is opening on. The generous defaults suit a desktop monitor;
     // on a laptop panel they would put the buttons below the bottom edge, which on a window with no
@@ -336,13 +342,13 @@ fn main() {
     };
 
     let mut viewport = egui::ViewportBuilder::default()
-        .with_title("EspansoManager")
+        .with_title(if EXPERIMENTAL { "Espanso Manager · Vista de prueba" } else { "EspansoManager" })
         .with_inner_size(fit(display::DEFAULT_SIZE))
         // Not passed through `fit`. This is the floor, and clamping a floor to the screen is how
         // a small primary monitor ends up licensing a window too small to use on a large one.
         .with_min_inner_size(display::MIN_SIZE)
         .with_visible(!start_hidden)
-        .with_taskbar(false);
+        .with_taskbar(EXPERIMENTAL);
     if let Some(icon) = icon {
         viewport = viewport.with_icon(icon);
     }
@@ -370,6 +376,7 @@ fn main() {
         start_hidden,
         startup_warning,
         load_error,
+        espanso_confirmed,
     };
 
     let _ = eframe::run_native(

@@ -51,7 +51,7 @@ use crate::espanso_ctl::EspansoCtl;
 use crate::fonts;
 use crate::i18n::{fill, Lang, Strings};
 use crate::settings::{Settings, SettingsStore};
-use crate::theme::{self, ThemeMode};
+use crate::theme::ThemeMode;
 use crate::tray::{Tray, TrayEvents, VISIBLE_POLL_INTERVAL};
 use crate::ui;
 use crate::ui::edit_form::EditState;
@@ -116,16 +116,31 @@ pub enum View {
     Settings,
     Tips,
     Onboarding,
+    /// Everything that can be done *to* a folder rather than inside it: rename, change the prefix
+    /// of its triggers, export it, delete it.
+    ///
+    /// A screen and not a permanent side panel, which is the whole point: these are five things a
+    /// person does to a folder perhaps twice in its life, and a panel that shows them at all times
+    /// spends a fifth of the window on them for ever. Reached from the library, one step back.
+    FolderOptions(String),
 }
 
 pub enum PendingConfirmKind {
+    /// One expansion, carrying the row index rather than only the trigger. The row is what was
+    /// clicked, and a hand-edited `base.yml` can hold two entries with the same trigger, which
+    /// deleting by trigger would take out together.
+    DeleteOne { index: usize },
     DeleteFolder { folder: String },
     DeleteSelection,
 }
 
-/// A destructive action (deleting a folder or a multi-selection) awaiting confirmation in an
-/// in-app modal, rather than a native message box — needed because the list of affected
-/// expansions can be long, and a native dialog can't scroll or collapse to stay compact.
+/// A destructive action awaiting confirmation in an in-app modal.
+///
+/// All three kinds go through the same modal, including the single one. It used to raise a native
+/// task dialog instead, which is grey, always light whatever the theme, and looks nothing like the
+/// window that asked the question — the one surface in the app that did not match. The bulk kinds
+/// were never able to use a native dialog anyway: the list of affected expansions can be long, and
+/// a native dialog can neither scroll nor collapse to stay compact.
 pub struct PendingConfirm {
     pub kind: PendingConfirmKind,
     /// Snapshot of affected entries at the moment the action was requested, as (trigger, preview)
@@ -133,6 +148,65 @@ pub struct PendingConfirm {
     /// else first.
     pub items: Vec<(String, String)>,
     pub expanded: bool,
+}
+
+/// Which half of a transfer the folder picker is standing in front of.
+pub enum TransferDirection {
+    /// Nothing has been named yet: the picker comes first, and the save dialog after it.
+    Export,
+    /// The file has already been read, so the picker can offer the folders it turned out to hold.
+    Import,
+}
+
+/// One folder in the transfer picker, and whether it is travelling.
+pub struct TransferGroup {
+    /// `None` is the group of expansions that were never put in a folder.
+    pub folder: Option<String>,
+    pub count: usize,
+    pub selected: bool,
+}
+
+/// An export or an import held back until the user says which folders it covers.
+///
+/// The document is carried here whole — already built, for an export, and already read, for an
+/// import — and the folders are filtered out of it only when the picker is confirmed. An import
+/// cannot ask the question any earlier than this: until the file has been read there is no way to
+/// know which folders are in it.
+pub struct PendingTransfer {
+    pub direction: TransferDirection,
+    pub export: crate::transfer::Export,
+    pub groups: Vec<TransferGroup>,
+    /// Imports only: expansions in the file that the picker does not offer, because nothing in
+    /// their folder can be added. Added to the skipped count at the end. See
+    /// [`crate::transfer::import_groups`].
+    pub left_out: usize,
+}
+
+impl PendingTransfer {
+    /// Every folder selected to begin with, so confirming the picker without touching anything
+    /// does exactly what the button did before the picker existed.
+    ///
+    /// Takes the groups already computed rather than working them out again: the caller had to
+    /// count them to know whether the picker was worth showing at all.
+    fn new(
+        direction: TransferDirection,
+        export: crate::transfer::Export,
+        groups: Vec<(Option<String>, usize)>,
+    ) -> Self {
+        Self {
+            direction,
+            export,
+            groups: groups
+                .into_iter()
+                .map(|(folder, count)| TransferGroup {
+                    folder,
+                    count,
+                    selected: true,
+                })
+                .collect(),
+            left_out: 0,
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -175,6 +249,9 @@ pub struct ListRow {
 /// every folder sixty times a second just to draw a list that had not moved — invisible at a dozen
 /// expansions, and several milliseconds of pure waste at a few thousand.
 pub struct ListCache {
+    /// Folder navigation is rebuilt with the list, never re-sorted on every repaint.
+    pub folder_names: Vec<String>,
+    pub folders: std::collections::BTreeMap<String, crate::folders::FolderInfo>,
     pub rows: Vec<ListRow>,
     /// Folder name → indices into `rows`, in the A→Z order folders are shown in.
     pub grouped: Vec<(String, Vec<usize>)>,
@@ -196,6 +273,60 @@ struct ListCacheKey {
     /// revision, adding or removing an expansion or a folder assignment still invalidates the cache.
     entry_count: usize,
     folder_assignment_count: usize,
+}
+
+/// Who Windows' own dialogs belong to.
+///
+/// The confirmations and the file pickers are drawn by Windows, not by this app, and Windows has to
+/// be told which window each one is *for*. Told nothing, it makes them ownerless, and two things
+/// follow: they open centred on the screen rather than on the window they came from, and when one
+/// closes Windows is under no obligation to hand the keyboard back to us. It can leave this thread
+/// with no focused window at all — which is the failure
+/// [`crate::display::restore_keyboard_focus`] exists to undo, and naming an owner here is the same
+/// bug attacked from the other end.
+///
+/// It carries the window's handle and not the window, deliberately: `AppState` decides and saves,
+/// and holding the window would be reaching well past that. A dialog needs nothing but the number
+/// that names its owner, and a number is `Copy` and keeps nothing alive.
+#[derive(Clone, Copy)]
+pub struct DialogOwner(Option<std::num::NonZeroIsize>);
+
+impl DialogOwner {
+    fn new(window: Option<&winit::window::Window>) -> Self {
+        Self(
+            window
+                .and_then(hwnd_of)
+                .and_then(|hwnd| std::num::NonZeroIsize::new(hwnd.0 as isize)),
+        )
+    }
+}
+
+impl raw_window_handle::HasWindowHandle for DialogOwner {
+    fn window_handle(
+        &self,
+    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+        let hwnd = self.0.ok_or(raw_window_handle::HandleError::Unavailable)?;
+        // The one thing the unsafety is about is whether the handle is real and belongs to this
+        // thread. It is our own main window, created by this thread, and every dialog that asks is
+        // modal — the call that opened it is still on the stack below, so the window cannot have
+        // gone anywhere in the meantime. When there is no window, `rfd` gets the `Err` and falls
+        // back to an ownerless dialog, exactly as it behaved before it was ever asked.
+        Ok(unsafe {
+            raw_window_handle::WindowHandle::borrow_raw(raw_window_handle::RawWindowHandle::Win32(
+                raw_window_handle::Win32WindowHandle::new(hwnd),
+            ))
+        })
+    }
+}
+
+impl raw_window_handle::HasDisplayHandle for DialogOwner {
+    fn display_handle(
+        &self,
+    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
+        // Windows has no display handle to speak of, and `rfd` never reads this one on Windows —
+        // it is here because `set_parent` asks for both traits. The constructor is the safe one.
+        Ok(raw_window_handle::DisplayHandle::windows())
+    }
 }
 
 /// All application state that isn't specific to rendering one particular screen. Owned by
@@ -220,9 +351,33 @@ pub struct AppState {
     /// Where a Shift-click range starts, following the same rule as a file list: the last row that
     /// was clicked on its own.
     pub selection_anchor: Option<String>,
+    /// Whether espanso is paused right now.
+    ///
+    /// A *copy*, refreshed from the tray at the top of every frame that has a window. The pause
+    /// state genuinely belongs to [`crate::tray::Tray`] — it is the thing that owns the timed pause,
+    /// the icon and the menu label — and the tray is owned by [`EspansoManagerApp`], not by the
+    /// state the views receive. Mirroring it is what lets the library show "Activo"/"Pausado"
+    /// without a view ever being handed the tray or the daemon.
+    pub paused: bool,
+    /// Whether espanso's last answer was a yes: it came up at startup, restarted after a save, or
+    /// took the last pause or resume.
+    ///
+    /// Never asked for on its own. Every check of the daemon blocks the interface thread (see
+    /// `espanso_ctl`), so this only records the answers the app already had to wait for — which
+    /// is enough for the library to stop saying "Activo" about a daemon that never replied.
+    pub espanso_confirmed: bool,
+    /// Set by the library's Pausar/Reanudar button and consumed by [`EspansoManagerApp::ui`] after
+    /// the frame is drawn.
+    ///
+    /// A request rather than an action, for the same reason: pausing means running `espanso` and
+    /// waiting on it, and a view that could do that would be a view that writes to disk. The flag
+    /// keeps the rule intact — every mutation goes through `AppState` or through the app itself.
+    pub pause_toggle_requested: bool,
     /// (original name, current edit buffer) while a folder's name is being edited inline.
     pub renaming_folder: Option<(String, String)>,
     pub pending_confirm: Option<PendingConfirm>,
+    /// An export or import waiting for its folders to be chosen. See [`PendingTransfer`].
+    pub pending_transfer: Option<PendingTransfer>,
     /// Set when the language changes; the owning app reloads fonts and tray labels next frame,
     /// since those need the egui context and the tray handle that `AppState` doesn't hold.
     pub pending_language_refresh: bool,
@@ -272,6 +427,9 @@ pub struct AppState {
     list_revision: u64,
     list_cache: Option<Rc<ListCache>>,
     list_cache_key: Option<ListCacheKey>,
+    /// The window that Windows' own confirmations and file pickers belong to. See [`DialogOwner`]:
+    /// it is a handle, not the window, and it is the only thing in here that names one.
+    dialog_owner: DialogOwner,
 }
 
 impl AppState {
@@ -363,7 +521,7 @@ impl AppState {
     }
 
     pub fn refresh_autostart_cache(&mut self) {
-        self.autostart_enabled = autostart::is_enabled();
+        self.autostart_enabled = autostart::is_enabled(&self.exe_path);
     }
 
     /// Shorthand for the active language's string table.
@@ -445,6 +603,8 @@ impl AppState {
         // in this model changing with it. The one place that needs it builds it from these two
         // fields at the moment it is asked for: `ui::list_view::visible_order`.
         ListCache {
+            folder_names: self.settings.all_folder_names(),
+            folders: crate::folders::summarize(&self.match_file.entries, &self.settings),
             rows,
             grouped: grouped.into_iter().collect(),
             ungrouped,
@@ -453,11 +613,16 @@ impl AppState {
     }
 
     pub fn set_autostart(&mut self, enabled: bool) {
+        if crate::EXPERIMENTAL { return; }
         let t = self.t();
         match autostart::set_enabled(enabled, &self.exe_path) {
             Ok(()) => {
-                self.autostart_enabled = enabled;
-                if enabled {
+                // Read back rather than assuming the write is the whole answer. Windows keeps a
+                // separate veto over start-up entries, and if clearing it did not take, the entry
+                // is written and still dead — better a switch that stays where the machine has it
+                // than one that says yes on top of a no.
+                self.refresh_autostart_cache();
+                if self.autostart_enabled {
                     self.set_info_banner(t.autostart_on);
                 } else {
                     self.set_info_banner(t.autostart_off);
@@ -520,8 +685,16 @@ impl AppState {
 
         for entry in &self.match_file.entries {
             if let MatchEntry::Simple(m) = entry {
+                // `:--` and its kind keep the trigger they have: with no word after the symbols
+                // there is nothing for a new prefix to sit in front of, and replacing "the prefix"
+                // would consume the whole trigger. Still listed below, so a rename that would
+                // land on one of them is caught as the collision it is.
                 let rest = Self::strip_leading_prefix(&m.trigger);
-                let new_trigger = format!("{new_prefix}{rest}");
+                let new_trigger = if crate::folders::has_word(&m.trigger) {
+                    format!("{new_prefix}{rest}")
+                } else {
+                    m.trigger.clone()
+                };
                 resulting.push(new_trigger.clone());
                 if new_trigger != m.trigger {
                     renamed.push((m.trigger.clone(), new_trigger));
@@ -565,14 +738,12 @@ impl AppState {
         };
 
         let confirmed = rfd::MessageDialog::new()
+            .set_parent(&self.dialog_owner)
             .set_title(t.prefix_confirm_title)
-            .set_description(fill(
+            .set_description(crate::i18n::fill_count(
                 t.prefix_confirm_body,
-                &[
-                    ("n", &renamed.len().to_string()),
-                    ("list", &summary),
-                    ("more", &more),
-                ],
+                renamed.len(),
+                &[("list", &summary), ("more", &more)],
             ))
             .set_buttons(rfd::MessageButtons::YesNo)
             .show();
@@ -593,33 +764,19 @@ impl AppState {
         let _ = self.settings_store.save(&self.settings);
         self.touch_list();
 
-        self.save_and_reload(fill(
-            t.prefix_applied,
-            &[("n", &renamed.len().to_string())],
-        ));
+        self.save_and_reload(crate::i18n::fill_count(t.prefix_applied, renamed.len(), &[]));
     }
 
     pub fn request_delete(&mut self, index: usize) {
+        let t = self.t();
         let Some(entry) = self.match_file.entries.get(index) else {
             return;
         };
-        let trigger = entry.trigger_label();
-        let t = self.t();
-        let confirmed = rfd::MessageDialog::new()
-            .set_title(t.delete_one_title)
-            .set_description(fill(t.delete_one_body, &[("name", &trigger)]))
-            .set_level(rfd::MessageLevel::Warning)
-            .set_buttons(rfd::MessageButtons::YesNo)
-            .show();
-        if confirmed == rfd::MessageDialogResult::Yes {
-            self.match_file.entries.remove(index);
-            self.settings.remove_trigger(&trigger);
-            self.selection_forget(&trigger);
-            let _ = self.settings_store.save(&self.settings);
-            self.touch_list();
-            self.view = View::List;
-            self.save_and_reload(t.expansion_deleted);
-        }
+        self.pending_confirm = Some(PendingConfirm {
+            kind: PendingConfirmKind::DeleteOne { index },
+            items: vec![(entry.trigger_label(), entry.preview(t))],
+            expanded: false,
+        });
     }
 
     /// Removes every entry whose trigger is in `triggers`, cleaning up their folder assignments
@@ -753,18 +910,22 @@ impl AppState {
             return;
         }
         let t = self.t();
-        // One pass building a lookup table, rather than re-scanning all entries for every
-        // selected trigger — matters once both the selection and the list are large.
-        let previews: std::collections::HashMap<String, String> = self
+        // Walked in list order, one pass, keeping whatever is ticked. Walking the selection
+        // instead needed a lookup table and still came out wrong: the selection is a set, so it
+        // iterates alphabetically, and two ticked rows would swap places between the list and the
+        // question asked about them.
+        let items: Vec<(String, String)> = self
             .match_file
             .entries
             .iter()
-            .map(|e| (e.trigger_label(), e.preview(t)))
-            .collect();
-        let items = self
-            .selected
-            .iter()
-            .map(|t| (t.clone(), previews.get(t).cloned().unwrap_or_default()))
+            .filter_map(|e| {
+                let trigger = e.trigger_label();
+                if self.selected.contains(&trigger) {
+                    Some((trigger, e.preview(t)))
+                } else {
+                    None
+                }
+            })
             .collect();
         self.pending_confirm = Some(PendingConfirm {
             kind: PendingConfirmKind::DeleteSelection,
@@ -782,7 +943,16 @@ impl AppState {
             .filter(|e| self.settings.folder_of(&e.trigger_label()) == Some(folder))
             .map(|e| (e.trigger_label(), e.preview(t)))
             .collect();
+        // An empty folder has nothing to warn about: the confirmation exists because deleting a
+        // folder deletes what is in it, and there is nothing in this one. Asking anyway would be a
+        // dialog whose honest body is "this will delete nothing".
         if items.is_empty() {
+            let message = crate::i18n::fill_count(t.folder_deleted, 0, &[("name", folder)]);
+            self.settings.forget_folder(folder);
+            let _ = self.settings_store.save(&self.settings);
+            self.touch_list();
+            self.view = View::List;
+            self.set_info_banner(message);
             return;
         }
         self.pending_confirm = Some(PendingConfirm {
@@ -794,6 +964,18 @@ impl AppState {
         });
     }
 
+    /// Makes a folder that holds nothing yet. Returns whether the name was free.
+    pub fn create_folder(&mut self, name: &str) -> bool {
+        if !self.settings.create_folder(name) {
+            let t = self.t();
+            self.set_error_banner(fill(t.folder_name_taken, &[("name", name.trim())]));
+            return false;
+        }
+        let _ = self.settings_store.save(&self.settings);
+        self.touch_list();
+        true
+    }
+
     pub fn cancel_pending_confirm(&mut self) {
         self.pending_confirm = None;
     }
@@ -802,21 +984,63 @@ impl AppState {
         let Some(pending) = self.pending_confirm.take() else {
             return;
         };
-        let triggers: Vec<String> = pending.items.iter().map(|(t, _)| t.clone()).collect();
-        let count = triggers.len();
-        self.remove_by_triggers(&triggers);
-        self.clear_selection();
         let t = self.t();
-        let message = match pending.kind {
-            PendingConfirmKind::DeleteFolder { folder } => fill(
-                t.folder_deleted,
-                &[("name", &folder), ("n", &count.to_string())],
-            ),
-            PendingConfirmKind::DeleteSelection => {
-                fill(t.selection_deleted, &[("n", &count.to_string())])
+        let n = pending.items.len();
+        let triggers = || pending.items.iter().map(|(t, _)| t.clone()).collect::<Vec<_>>();
+        match pending.kind {
+            // The single row is the one path that leaves the selection alone: deleting the
+            // expansion open in the editor is no reason to forget what was ticked in the list.
+            PendingConfirmKind::DeleteOne { index } => {
+                self.delete_one_at(index, pending.items.first().map(|(t, _)| t.as_str()));
             }
-        };
-        self.save_and_reload(message);
+            PendingConfirmKind::DeleteFolder { ref folder } => {
+                let message = crate::i18n::fill_count(t.folder_deleted, n, &[("name", folder)]);
+                self.remove_by_triggers(&triggers());
+                // The declaration goes with the contents. Left behind, the folder would come back
+                // as an empty one the moment the list was rebuilt — which is not what "delete
+                // Trabajo and its 4 expansions" said it would do.
+                self.settings.forget_folder(folder);
+                let _ = self.settings_store.save(&self.settings);
+                self.clear_selection();
+                if matches!(self.view, View::FolderOptions(ref f) if f == folder) {
+                    self.view = View::List;
+                }
+                self.save_and_reload(message);
+            }
+            PendingConfirmKind::DeleteSelection => {
+                let message = crate::i18n::fill_count(t.selection_deleted, n, &[]);
+                self.remove_by_triggers(&triggers());
+                self.clear_selection();
+                self.save_and_reload(message);
+            }
+        }
+    }
+
+    /// Deletes the entry at `index`, but only while that row still holds the trigger the
+    /// confirmation showed. Nothing can edit the list behind a modal, so this never fires in
+    /// practice — it is here so that an index kept across a frame can never delete the wrong
+    /// expansion if that ever stops being true.
+    ///
+    /// Unlike the bulk path this leaves the selection alone: deleting one row from the editor is
+    /// no reason to forget what was ticked in the list.
+    fn delete_one_at(&mut self, index: usize, expected: Option<&str>) {
+        let matches = self
+            .match_file
+            .entries
+            .get(index)
+            .map(|e| e.trigger_label());
+        let Some(trigger) = matches else { return };
+        if expected.is_some_and(|want| want != trigger) {
+            return;
+        }
+        self.match_file.entries.remove(index);
+        self.settings.remove_trigger(&trigger);
+        self.selection_forget(&trigger);
+        let _ = self.settings_store.save(&self.settings);
+        self.touch_list();
+        self.view = View::List;
+        let t = self.t();
+        self.save_and_reload(t.expansion_deleted);
     }
 
     pub fn start_rename_folder(&mut self, folder: &str) {
@@ -845,8 +1069,16 @@ impl AppState {
                 *folder = new.clone();
             }
         }
+        // And the declaration, when there is one — otherwise renaming an empty folder would leave
+        // the old name behind and create a second, equally empty one beside it.
+        if self.settings.folders.remove(&old) {
+            self.settings.folders.insert(new.clone());
+        }
         let _ = self.settings_store.save(&self.settings);
         self.touch_list();
+        if matches!(self.view, View::FolderOptions(ref f) if f == &old) {
+            self.view = View::FolderOptions(new.clone());
+        }
         self.set_info_banner(fill(t.folder_renamed, &[("name", &new)]));
     }
 
@@ -926,27 +1158,103 @@ impl AppState {
         self.touch_list();
         self.clear_selection();
         let t = self.t();
-        let n = triggers.len().to_string();
+        let n = triggers.len();
         match &folder {
-            Some(f) => {
-                self.set_info_banner(fill(t.moved_to_folder, &[("n", &n), ("name", f)]))
-            }
-            None => self.set_info_banner(fill(t.removed_from_folder, &[("n", &n)])),
+            Some(f) => self.set_info_banner(crate::i18n::fill_count(t.moved_to_folder, n, &[("name", f)])),
+            None => self.set_info_banner(crate::i18n::fill_count(t.removed_from_folder, n, &[])),
         }
         if let Some(banner) = &mut self.banner {
             banner.undo = Some(UndoAction::FolderMove(previous));
         }
     }
 
-    /// Writes the expansions the list shows out to a file the user picks.
-    pub fn export_expansions(&mut self) {
+    /// Writes one folder's expansions out to a file, with nothing to choose between first: the
+    /// folder was already named by the screen this came from.
+    pub fn export_folder(&mut self, folder: &str) {
+        let export = crate::transfer::build_export(&self.match_file.entries, |trigger| {
+            self.settings.folder_of(trigger).map(str::to_owned)
+        });
+        let export = crate::transfer::retain_folders(export, &[Some(folder.to_owned())]);
+        if !export.expansions.is_empty() { self.write_export(export); }
+    }
+
+    pub fn apply_folder_prefix(&mut self, folder: &str, prefix: &str) {
+        if let Some(error) = self.load_error.clone() { self.set_error_banner(error); return; }
+        let changes = match crate::folders::plan(&self.match_file.entries, &self.settings, folder, prefix) {
+            Ok(changes) => changes,
+            Err(error) => { self.set_error_banner(ui::studio::prefix_error(self, &error)); return; }
+        };
+        if changes.is_empty() { self.set_info_banner(self.t().prefix_already_applied); return; }
+        let mut candidate = self.match_file.clone();
+        let mut settings = self.settings.clone();
+        for change in &changes {
+            if let MatchEntry::Simple(m) = &mut candidate.entries[change.index] { m.trigger.clone_from(&change.new); }
+        }
+        crate::folders::apply_assignments(&mut settings, &changes);
+        let warnings = match yaml_io::save(&self.match_file_path, &candidate, &self.backups_dir) {
+            Ok(warnings) => warnings,
+            Err(error) => { self.set_error_banner(error.friendly_message(self.t())); return; }
+        };
+        // If the folder map cannot be persisted, restore the original YAML before accepting the
+        // operation. No changed trigger should be left detached from its folder after a restart.
+        if let Err(error) = self.settings_store.save(&settings) {
+            let rollback = yaml_io::save(&self.match_file_path, &self.match_file, &self.backups_dir);
+            if rollback.is_err() { self.match_file = candidate; self.settings = settings; self.touch_list(); }
+            self.set_error_banner(format!("{}: {error}{}", self.t().view_save_error,
+                rollback.err().map(|e| format!("\n{}", e.friendly_message(self.t()))).unwrap_or_default()));
+            return;
+        }
+        self.match_file = candidate;
+        self.settings = settings;
+        self.clear_selection();
+        self.touch_list();
         let t = self.t();
+        let message = crate::i18n::fill_count(t.prefix_applied, changes.len(), &[]);
+        let restarted = self.ctl.restart_and_confirm(Duration::from_secs(6), t);
+        self.espanso_confirmed = restarted.is_ok();
+        match restarted {
+            Ok(()) => {
+                if let Some(warning) = warnings.message(t) { self.set_error_banner(format!("{message}\n{warning}")); }
+                else { self.set_info_banner(message); }
+            }
+            Err(error) => self.set_error_banner(error),
+        }
+    }
+
+    /// Writes the expansions the list shows out to a file the user picks.
+    ///
+    /// With two or more folders in play the picker comes first, so that sending one folder to a
+    /// colleague does not mean handing over the whole collection. With one folder or none there is
+    /// nothing to choose between, and the question is skipped rather than asked with a single
+    /// possible answer.
+    pub fn export_expansions(&mut self) {
         let export = crate::transfer::build_export(&self.match_file.entries, |trigger| {
             self.settings.folder_of(trigger).map(str::to_string)
         });
+
+        let groups = crate::transfer::groups(&export);
+        if groups.len() < 2 {
+            self.write_export(export);
+            return;
+        }
+        self.pending_transfer = Some(PendingTransfer::new(
+            TransferDirection::Export,
+            export,
+            groups,
+        ));
+    }
+
+    /// Asks for a file name and writes `export` to it.
+    ///
+    /// Takes the document rather than building one, because it is reached from two places: the
+    /// button directly, when there was nothing to ask, and the picker, which has already thrown
+    /// away the folders the user left out.
+    fn write_export(&mut self, export: crate::transfer::Export) {
+        let t = self.t();
         let count = export.expansions.len();
 
         let Some(path) = rfd::FileDialog::new()
+            .set_parent(&self.dialog_owner)
             .set_title(t.export_button)
             .set_file_name(crate::transfer::suggested_filename())
             .add_filter(t.transfer_file_kind, &["yml", "yaml"])
@@ -966,9 +1274,13 @@ impl AppState {
 
     /// Adds the expansions from a file the user picks. Never replaces anything: see
     /// [`crate::transfer::merge`].
+    ///
+    /// The file is read before anything is asked, because until it has been read there is no way
+    /// to know which folders it holds — and those are what the picker offers.
     pub fn import_expansions(&mut self) {
         let t = self.t();
         let Some(path) = rfd::FileDialog::new()
+            .set_parent(&self.dialog_owner)
             .set_title(t.import_button)
             .add_filter(t.transfer_file_kind, &["yml", "yaml"])
             .pick_file()
@@ -990,15 +1302,34 @@ impl AppState {
             }
         };
 
+        // Counted against what is already here, so each folder offers what it will really add.
+        let (groups, left_out) = crate::transfer::import_groups(&self.match_file.entries, &export);
+        if groups.len() < 2 {
+            self.merge_import(export, 0);
+            return;
+        }
+        let mut pending = PendingTransfer::new(TransferDirection::Import, export, groups);
+        pending.left_out = left_out;
+        self.pending_transfer = Some(pending);
+    }
+
+    /// Adds an already-read import to what is there, and says what happened. `left_out` is the
+    /// number of expansions the picker already knew would be skipped and so never offered.
+    fn merge_import(&mut self, export: crate::transfer::Export, left_out: usize) {
+        let t = self.t();
         let merged = crate::transfer::merge(&self.match_file.entries, export);
         let added = merged.added.len();
-        let skipped = merged.skipped;
+        let skipped = merged.skipped + left_out;
 
         if added == 0 {
             self.set_info_banner(fill(t.import_none_added, &[("k", &skipped.to_string())]));
             return;
         }
 
+        // Kept so a failed write can be taken back: otherwise the list would show expansions that
+        // are not in the file, and the next successful save would write them in unasked.
+        let previous_entries = self.match_file.entries.clone();
+        let previous_settings = self.settings.clone();
         self.match_file.entries.extend(merged.added);
         for (trigger, folder) in &merged.folders {
             self.settings.set_folder(trigger, folder.clone());
@@ -1014,8 +1345,45 @@ impl AppState {
                 &[("n", &added.to_string()), ("k", &skipped.to_string())],
             )
         };
-        self.save_and_reload(message);
+        if !self.save_and_reload(message) {
+            self.match_file.entries = previous_entries;
+            self.settings = previous_settings;
+            let _ = self.settings_store.save(&self.settings);
+            self.touch_list();
+        }
     }
+
+    /// Closes a folder picker without exporting or importing anything.
+    pub fn cancel_pending_transfer(&mut self) {
+        self.pending_transfer = None;
+    }
+
+    /// Carries out the transfer the picker was standing in front of, with the chosen folders only.
+    pub fn confirm_pending_transfer(&mut self) {
+        let Some(pending) = self.pending_transfer.take() else {
+            return;
+        };
+
+        let keep: Vec<Option<String>> = pending
+            .groups
+            .into_iter()
+            .filter(|group| group.selected)
+            .map(|group| group.folder)
+            .collect();
+        if keep.is_empty() {
+            // The picker will not let its own button be pressed in this state; this is the second
+            // line of defence. An export of nothing would still write a file, and an import of
+            // nothing would announce "added: 0" as though something had gone wrong.
+            return;
+        }
+
+        let export = crate::transfer::retain_folders(pending.export, &keep);
+        match pending.direction {
+            TransferDirection::Export => self.write_export(export),
+            TransferDirection::Import => self.merge_import(export, pending.left_out),
+        }
+    }
+
 
     /// Puts back whatever the banner currently on screen is offering to undo.
     pub fn undo_from_banner(&mut self) {
@@ -1058,6 +1426,11 @@ impl AppState {
             MatchEntry::Advanced(_) => None,
         });
 
+        // What to put back if the file cannot be written. Until `base.yml` has it, the edit exists
+        // only in the form — so the form stays, and the list must not show a row that disk lacks.
+        let previous_entries = self.match_file.entries.clone();
+        let previous_settings = self.settings.clone();
+
         match edit.editing_index {
             Some(index) => self.match_file.entries[index] = MatchEntry::Simple(new_match.clone()),
             None => self.match_file.entries.push(MatchEntry::Simple(new_match.clone())),
@@ -1071,136 +1444,172 @@ impl AppState {
         let _ = self.settings_store.save(&self.settings);
         self.touch_list();
 
-        self.view = View::List;
-        self.save_and_reload(t.expansion_saved);
+        if self.save_and_reload(t.expansion_saved) {
+            self.view = View::List;
+        } else {
+            // The red banner `save_and_reload` raised says why; the draft is still on screen,
+            // untouched, to try again or cancel.
+            self.match_file.entries = previous_entries;
+            self.settings = previous_settings;
+            let _ = self.settings_store.save(&self.settings);
+            if let Some(previous_trigger) = &previous_trigger {
+                self.selection_rename(&new_match.trigger, previous_trigger);
+            }
+            self.touch_list();
+        }
     }
 
-    fn save_and_reload(&mut self, success_message: impl Into<String>) {
+    /// Writes `base.yml` and restarts espanso, then says how it went. Returns whether the file was
+    /// written — a failed restart after a good write still counts, because the change is on disk
+    /// and will be picked up by the next espanso that starts.
+    fn save_and_reload(&mut self, success_message: impl Into<String>) -> bool {
         // The model never came from disk. Writing it back would put an empty file where one we
         // could not read used to be, and every expansion in it would be gone from espanso. Say so
         // instead, in the same words the dialog at startup used.
         if let Some(message) = self.load_error.clone() {
             self.set_error_banner(message);
-            return;
+            return false;
         }
         let t = self.t();
         match yaml_io::save(&self.match_file_path, &self.match_file, &self.backups_dir) {
             Ok(warnings) => {
-                let outcome = match self.ctl.restart_and_confirm(Duration::from_secs(6), t) {
-                    Ok(()) => Ok(success_message.into()),
-                    Err(e) => Err(e),
-                };
-                // The edit is on disk either way, so the first line still says so. What follows is
-                // that the safety net under it is not there — which is worth the red banner,
-                // because the moment it matters is the moment nobody is looking.
+                let message = success_message.into();
+                let outcome = self.ctl.restart_and_confirm(Duration::from_secs(6), t);
+                self.espanso_confirmed = outcome.is_ok();
+                // The edit is on disk either way, so the first line still says what was done —
+                // "1 añadida, 1 omitida" is the answer to what the user asked, and a failed
+                // restart used to replace it outright. What follows is what is not in place
+                // under it, which is worth the red banner, because the moment it matters is the
+                // moment nobody is looking.
                 match (outcome, warnings.message(t)) {
-                    (Ok(message), None) => self.set_info_banner(message),
-                    (Ok(message), Some(warning)) => {
+                    (Ok(()), None) => self.set_info_banner(message),
+                    (Ok(()), Some(warning)) => {
                         self.set_error_banner(format!("{message}\n\n{warning}"))
                     }
-                    (Err(e), None) => self.set_error_banner(e),
-                    (Err(e), Some(warning)) => self.set_error_banner(format!("{e}\n\n{warning}")),
+                    (Err(e), None) => self.set_error_banner(format!("{message}\n\n{e}")),
+                    (Err(e), Some(warning)) => {
+                        self.set_error_banner(format!("{message}\n\n{e}\n\n{warning}"))
+                    }
                 }
+                true
             }
-            Err(e) => self.set_error_banner(e.friendly_message(t)),
+            Err(e) => {
+                self.set_error_banner(e.friendly_message(t));
+                false
+            }
         }
     }
 }
 
-// --- Windows 11 (Fluent) palette ---------------------------------------------------------------
+// --- The palette ------------------------------------------------------------------------------
 //
-// Values below are the documented WinUI colour tokens rather than invented ones, so the window sits
-// next to Settings or File Explorer without looking like a different toolkit. The accent itself is
-// read from the user's own Windows accent palette, in the shade Fluent specifies per theme.
+// One token set, defined once here, for every screen. The values are the ones the approved
+// renovation fixes (`output/ui-plan-2026-09-20.md`, §8), which start from Windows 11's own Fluent
+// ramp and then part from it in one deliberate way: **dark is not an inversion of light.** Its
+// surface sits *above* its background, its muted text is lighter rather than darker, and its accent
+// is a pale lilac instead of the saturated violet that light uses — a saturated accent on a dark
+// panel reads as a glow, not as a colour.
+//
+// Everything below is a `fn(is_light)`, never a stored pair, so a frame can never be drawn half in
+// one theme and half in the other.
 
-/// `SolidBackgroundFillColorBase` — the window itself.
+/// The window itself — the surface every card sits *on*, never the card.
 pub fn win_background_for(is_light: bool) -> egui::Color32 {
     win_background(is_light)
 }
 
 fn win_background(is_light: bool) -> egui::Color32 {
     if is_light {
-        egui::Color32::from_rgb(0xF3, 0xF3, 0xF3)
+        egui::Color32::from_rgb(0xF6, 0xF7, 0xFB)
     } else {
-        egui::Color32::from_rgb(0x20, 0x20, 0x20)
+        egui::Color32::from_rgb(0x1B, 0x1D, 0x24)
     }
 }
 
-/// `CardBackgroundFillColorDefault` — raised surfaces such as a folder or a settings group.
+/// Raised surfaces: a list, a section of the editor, a modal.
+pub fn win_card_for(is_light: bool) -> egui::Color32 {
+    win_card(is_light)
+}
+
 fn win_card(is_light: bool) -> egui::Color32 {
     if is_light {
-        egui::Color32::from_rgb(0xFB, 0xFB, 0xFB)
+        egui::Color32::from_rgb(0xFF, 0xFF, 0xFF)
     } else {
-        egui::Color32::from_rgb(0x2B, 0x2B, 0x2B)
+        egui::Color32::from_rgb(0x24, 0x27, 0x30)
     }
 }
 
-/// `ControlFillColorDefault` — the body of a button or other control.
+/// The body of a button or other control.
+///
+/// Deliberately the same value as a card: in this design a control is told apart by its outline and
+/// its padding, not by a fill of its own. That is what keeps a row of buttons from looking like a
+/// row of tiles.
 pub fn win_control_for(is_light: bool) -> egui::Color32 {
     win_control(is_light)
 }
 
 fn win_control(is_light: bool) -> egui::Color32 {
-    if is_light {
-        egui::Color32::from_rgb(0xFD, 0xFD, 0xFD)
-    } else {
-        egui::Color32::from_rgb(0x2D, 0x2D, 0x2D)
-    }
+    win_card(is_light)
 }
 
-/// `ControlFillColorSecondary` — the same control while the pointer is over it.
+/// The same control while the pointer is over it.
 fn win_control_hover(is_light: bool) -> egui::Color32 {
     if is_light {
-        egui::Color32::from_rgb(0xF6, 0xF6, 0xF6)
+        egui::Color32::from_rgb(0xF0, 0xF1, 0xF5)
     } else {
-        egui::Color32::from_rgb(0x32, 0x32, 0x32)
+        egui::Color32::from_rgb(0x2E, 0x32, 0x3D)
     }
 }
 
-/// `ControlFillColorTertiary` — pressed.
+/// Pressed.
 fn win_control_active(is_light: bool) -> egui::Color32 {
     if is_light {
-        egui::Color32::from_rgb(0xF5, 0xF5, 0xF5)
+        egui::Color32::from_rgb(0xE8, 0xE9, 0xEF)
     } else {
-        egui::Color32::from_rgb(0x27, 0x27, 0x27)
+        egui::Color32::from_rgb(0x35, 0x3A, 0x47)
     }
 }
 
-/// `ControlStrokeColorDefault` — the hairline around controls and cards.
+/// The one line colour: around a control, around a card, and between two rows.
 fn win_stroke(is_light: bool) -> egui::Color32 {
     if is_light {
-        egui::Color32::from_rgb(0xE5, 0xE5, 0xE5)
+        egui::Color32::from_rgb(0xDC, 0xDF, 0xE8)
     } else {
-        egui::Color32::from_rgb(0x38, 0x38, 0x38)
+        egui::Color32::from_rgb(0x40, 0x46, 0x53)
     }
 }
 
-/// `TextFillColorPrimary`.
+/// Primary text.
 fn win_text(is_light: bool) -> egui::Color32 {
     if is_light {
-        egui::Color32::from_rgb(0x1B, 0x1B, 0x1B)
+        egui::Color32::from_rgb(0x24, 0x26, 0x30)
     } else {
-        egui::Color32::from_rgb(0xFF, 0xFF, 0xFF)
+        egui::Color32::from_rgb(0xF0, 0xF1, 0xF7)
     }
 }
 
-/// `TextFillColorSecondary` — hints and supporting copy.
+/// Supporting text — hints, counts, the quieter half of a pair.
+///
+/// There are exactly two text colours in this design. Anything that was a third one now resolves
+/// here, which is what stops a screen from ending up with four greys that nobody chose.
 fn win_text_secondary(is_light: bool) -> egui::Color32 {
     if is_light {
-        egui::Color32::from_rgb(0x5D, 0x5D, 0x5D)
+        egui::Color32::from_rgb(0x60, 0x65, 0x77)
     } else {
-        egui::Color32::from_rgb(0xC5, 0xC5, 0xC5)
+        egui::Color32::from_rgb(0xB7, 0xBE, 0xCF)
     }
 }
 
-/// The user's own Windows accent, in the shade Fluent uses for this theme.
+/// The accent, in the shade this theme uses.
 ///
-/// This reads the registry, so it is called only when the palette is (re)built — never from
-/// drawing code. Widgets that need the accent read it back out of the palette with [`accent`],
-/// which is a field access.
+/// Called only when the palette is (re)built — never from drawing code. Widgets that need the
+/// accent read it back out of the palette with [`accent`], which is a field access.
 fn read_system_accent(is_light: bool) -> egui::Color32 {
-    let (r, g, b) = theme::system_accent(is_light);
-    egui::Color32::from_rgb(r, g, b)
+    if is_light {
+        egui::Color32::from_rgb(0x64, 0x45, 0xC0)
+    } else {
+        egui::Color32::from_rgb(0xC4, 0xAF, 0xFF)
+    }
 }
 
 /// The accent colour currently in use.
@@ -1237,7 +1646,7 @@ fn apply_layout_style(ctx: &egui::Context, text_scale: f32) {
         use egui::{FontFamily, FontId, TextStyle};
         style.text_styles.insert(
             TextStyle::Heading,
-            FontId::new(size(20.0), FontFamily::Proportional),
+            FontId::new(size(25.0), FontFamily::Proportional),
         );
         style.text_styles.insert(
             TextStyle::Body,
@@ -1257,8 +1666,8 @@ fn apply_layout_style(ctx: &egui::Context, text_scale: f32) {
         );
 
         style.spacing.item_spacing = egui::vec2(10.0, 8.0);
-        style.spacing.button_padding = egui::vec2(12.0, 7.0);
-        style.spacing.interact_size.y = 30.0;
+        style.spacing.button_padding = egui::vec2(14.0, 9.0);
+        style.spacing.interact_size.y = 34.0;
         style.spacing.indent = 22.0;
     });
 }
@@ -1278,8 +1687,10 @@ pub fn tuned_visuals(is_light: bool) -> egui::Visuals {
     let text = win_text(is_light);
     let text_2 = win_text_secondary(is_light);
 
-    // Fluent's control radius.
-    let radius = egui::CornerRadius::same(4);
+    // The control radius. See [`crate::ui::controls::RADIUS_CONTROL`], which is where every other
+    // corner in the app is decided; this one has to be a literal because `Visuals` wants it before
+    // any of the drawing code exists.
+    let radius = egui::CornerRadius::same(7);
 
     v.widgets.noninteractive.bg_fill = win_card(is_light);
     v.widgets.noninteractive.weak_bg_fill = win_card(is_light);
@@ -1342,41 +1753,23 @@ pub fn tuned_visuals(is_light: bool) -> egui::Visuals {
     v
 }
 
-/// `CardBackgroundFillColorDefault` — used for a folder's card.
-pub fn folder_fill(is_light: bool) -> egui::Color32 {
-    win_card(is_light)
-}
-
-/// The line between two rows. Slightly stronger than the stroke around a control: with the boxes
-/// gone it is the only thing separating one expansion from the next, so it has to survive a cheap
-/// panel at low brightness.
+/// The line between two rows, and the outline of a card. The one line colour.
 pub fn hairline(is_light: bool) -> egui::Color32 {
-    if is_light {
-        egui::Color32::from_rgb(0xDE, 0xDE, 0xDE)
-    } else {
-        egui::Color32::from_rgb(0x3B, 0x3B, 0x3B)
-    }
+    win_stroke(is_light)
 }
 
-/// The border around something you can type in or press — deliberately more visible than a
-/// hairline, because it marks the edge of a target rather than a division between two.
+/// The border around something you can type in or press — a shade firmer than a hairline, because
+/// it marks the edge of a *target* rather than a division between two things already separate.
+/// Still derived from the same line colour, so it can never drift into being a second palette.
 pub fn line_strong(is_light: bool) -> egui::Color32 {
-    if is_light {
-        egui::Color32::from_rgb(0xD6, 0xD6, 0xD6)
-    } else {
-        egui::Color32::from_rgb(0x45, 0x45, 0x45)
-    }
+    mix(win_stroke(is_light), win_text(is_light), if is_light { 0.16 } else { 0.14 })
 }
 
-/// Supporting text: counts, hints, the quieter half of a pair. Darker on light than the mock had
-/// it, which measured about 3.2:1 against the window and would have failed anyone reading on a
-/// dim panel.
+/// Kept as a name because several screens say "tertiary" where they mean "the quiet one". There is
+/// no third text colour in this design: this resolves to the same supporting grey as
+/// [`secondary_text`], which is what stops a screen ending up with four greys nobody chose.
 pub fn text_tertiary(is_light: bool) -> egui::Color32 {
-    if is_light {
-        egui::Color32::from_rgb(0x6E, 0x6E, 0x6E)
-    } else {
-        egui::Color32::from_rgb(0x94, 0x94, 0x94)
-    }
+    win_text_secondary(is_light)
 }
 
 pub fn secondary_text(is_light: bool) -> egui::Color32 {
@@ -1509,38 +1902,47 @@ pub fn selection_tint(is_light: bool, accent: egui::Color32) -> egui::Color32 {
     mix(
         win_background(is_light),
         accent,
-        if is_light { 0.11 } else { 0.14 },
+        if is_light { 0.075 } else { 0.16 },
     )
 }
 
 /// The faint wash under the row the pointer is over. Deliberately much weaker than the selection,
 /// so "where my mouse is" never competes with "what I have chosen".
 pub fn hover_tint(is_light: bool) -> egui::Color32 {
-    if is_light {
-        egui::Color32::from_rgb(0xE9, 0xE9, 0xEC)
-    } else {
-        egui::Color32::from_rgb(0x2A, 0x2A, 0x2E)
-    }
+    mix(
+        win_background(is_light),
+        win_text(is_light),
+        if is_light { 0.05 } else { 0.07 },
+    )
 }
 
-/// A red that stays legible on either theme — Windows' own error red on light, its lighter
-/// counterpart on dark, rather than one colour that is too dark on one and too harsh on the other.
+/// A red that stays legible on either theme, and that is *muted* rather than fire-engine: it has to
+/// be able to sit inside a sentence without shouting over the words beside it.
 pub fn danger(is_light: bool) -> egui::Color32 {
     if is_light {
-        egui::Color32::from_rgb(0xC4, 0x2B, 0x1C)
+        egui::Color32::from_rgb(0xB0, 0x29, 0x3B)
     } else {
-        egui::Color32::from_rgb(0xFF, 0x99, 0xA4)
+        egui::Color32::from_rgb(0xFF, 0xB1, 0xB8)
     }
 }
 
 /// An amber for "this will probably not do what you want" — louder than a hint, quieter than an
-/// error, because nothing here is wrong yet. Windows' own caution colour on light, and a lighter
-/// version of it on dark, for the same reason `danger` has two.
+/// error, because nothing here is wrong yet.
 pub fn caution(is_light: bool) -> egui::Color32 {
     if is_light {
-        egui::Color32::from_rgb(0x8A, 0x5B, 0x00)
+        egui::Color32::from_rgb(0x85, 0x60, 0x14)
     } else {
-        egui::Color32::from_rgb(0xF2, 0xC0, 0x5C)
+        egui::Color32::from_rgb(0xED, 0xCC, 0x83)
+    }
+}
+
+/// A green that means "running", and nothing else. The only place it appears is the live status
+/// beside the library's heading, which is why it is a colour and not a word in a box.
+pub fn success(is_light: bool) -> egui::Color32 {
+    if is_light {
+        egui::Color32::from_rgb(0x24, 0x6C, 0x47)
+    } else {
+        egui::Color32::from_rgb(0x96, 0xD5, 0xAC)
     }
 }
 
@@ -1565,6 +1967,8 @@ pub struct EspansoManagerApp {
     /// The accent the current palette was built from, so a change to it in Windows can be noticed
     /// without re-reading the registry from drawing code.
     last_accent: egui::Color32,
+    /// Native small/large window icons are reselected when this window moves between DPI scales.
+    last_icon_dpi: u32,
     start_hidden_pending: bool,
     /// Set by the tray's Quit item. The window's close handler normally cancels the close and hides
     /// to the tray instead; this is what tells it that this particular close is meant.
@@ -1589,12 +1993,15 @@ pub struct StartupContext {
     /// Set if the expansions file exists but could not be read. The model is the empty fallback,
     /// so saving stays refused until the app is restarted against a file it can parse.
     pub load_error: Option<String>,
+    /// Whether espanso answered at startup. See [`AppState::espanso_confirmed`].
+    pub espanso_confirmed: bool,
 }
 
 impl EspansoManagerApp {
     pub fn new(cc: &eframe::CreationContext<'_>, mut ctx: StartupContext) -> Self {
         let is_light = ctx.settings.theme_mode.is_light();
         let window = cc.winit_window().cloned();
+        let last_icon_dpi = window.as_deref().map_or(0, crate::icons::apply_window);
         // A size remembered on one machine travels with the folder to the next one, so a window
         // saved on a large monitor can arrive on a laptop taller than the screen. Correct it before
         // anything is drawn, and size the text to the screen that is actually here.
@@ -1626,7 +2033,8 @@ impl EspansoManagerApp {
         let wanted = if OWN_LAUNCHER { "OFF" } else { "ALT+SPACE" };
         match crate::config_patch::set_search_shortcut(&ctx.config_path, wanted) {
             Ok(true) => {
-                let _ = ctx.ctl.restart_and_confirm(Duration::from_secs(6), ctx.settings.t());
+                ctx.espanso_confirmed =
+                    ctx.ctl.restart_and_confirm(Duration::from_secs(6), ctx.settings.t()).is_ok();
             }
             Ok(false) => {}
             // Joins whatever main.rs already had to say, since the banner that carries it has not
@@ -1676,12 +2084,18 @@ impl EspansoManagerApp {
             search: String::new(),
             banner: None,
             load_error: ctx.load_error,
-            autostart_enabled: autostart::is_enabled(),
+            // Asked before `exe_path` is moved just below: the answer depends on which executable
+            // this is, because a Run entry naming a different copy starts that one, not this one.
+            autostart_enabled: autostart::is_enabled(&ctx.exe_path),
             exe_path: ctx.exe_path,
             selected: BTreeSet::new(),
             selection_anchor: None,
+            paused: false,
+            espanso_confirmed: ctx.espanso_confirmed,
+            pause_toggle_requested: false,
             renaming_folder: None,
             pending_confirm: None,
+            pending_transfer: None,
             pending_language_refresh: false,
             pending_theme_refresh: false,
             onboarding_probe: String::new(),
@@ -1700,6 +2114,7 @@ impl EspansoManagerApp {
             list_revision: 0,
             list_cache: None,
             list_cache_key: None,
+            dialog_owner: DialogOwner::new(window.as_deref()),
         };
         state.drop_orphan_folders();
         if let Some(watch) = &hotkey {
@@ -1738,6 +2153,7 @@ impl EspansoManagerApp {
             theme_recheck_until: Instant::now(),
             is_light,
             last_accent: read_system_accent(is_light),
+            last_icon_dpi,
             start_hidden_pending: ctx.start_hidden,
             quitting: false,
         }
@@ -1978,8 +2394,13 @@ impl EspansoManagerApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 return;
             }
-            if let Some(Err(message)) = self.tray.handle_menu_id(&event.id, &self.state.ctl, t) {
-                self.state.set_error_banner(message);
+            match self.tray.handle_menu_id(&event.id, &self.state.ctl, t) {
+                Some(Ok(())) => self.state.espanso_confirmed = true,
+                Some(Err(message)) => {
+                    self.state.espanso_confirmed = false;
+                    self.state.set_error_banner(message);
+                }
+                None => {}
             }
         }
     }
@@ -2020,6 +2441,12 @@ impl EspansoManagerApp {
     fn poll_theme(&mut self, ctx: &egui::Context) {
         let now = Instant::now();
 
+        if let Some(window) = self.window.as_deref() {
+            if (window.scale_factor() * 96.0).round() as u32 != self.last_icon_dpi {
+                self.last_icon_dpi = crate::icons::apply_window(window);
+            }
+        }
+
         if let Some(watch) = &self.theme_watch {
             if watch.take_changed() {
                 // Windows announces the change before everything behind it has settled — the
@@ -2051,6 +2478,10 @@ impl EspansoManagerApp {
             }
         }
         self.last_theme_check = now;
+
+        if let Err(message) = self.tray.refresh_appearance(self.state.t()) {
+            self.state.set_error_banner(message);
+        }
 
         let mode = self.state.settings.theme_mode;
         let is_light = if mode.follows_system() {
@@ -2092,7 +2523,7 @@ impl EspansoManagerApp {
                 // sentence, which is exactly the part that went over the edge.
                 ui.horizontal_top(|ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
-                        if ui.small_button("❌").on_hover_text(t.banner_close_tip).clicked() {
+                        if ui.small_button(crate::fonts::icon("❌")).on_hover_text(t.banner_close_tip).clicked() {
                             close = true;
                         }
                         if banner.undo.is_some() && ui.small_button(t.undo).clicked() {
@@ -2127,8 +2558,13 @@ impl eframe::App for EspansoManagerApp {
         self.poll_hotkey();
         self.show_search_window(ctx);
 
-        if let Some(Err(message)) = self.tray.tick(&self.state.ctl, self.state.t()) {
-            self.state.set_error_banner(message);
+        match self.tray.tick(&self.state.ctl, self.state.t()) {
+            Some(Ok(())) => self.state.espanso_confirmed = true,
+            Some(Err(message)) => {
+                self.state.espanso_confirmed = false;
+                self.state.set_error_banner(message);
+            }
+            None => {}
         }
 
         // Settings changes that need more than `AppState` to take effect are applied here, once,
@@ -2145,6 +2581,13 @@ impl eframe::App for EspansoManagerApp {
         self.poll_theme(ctx);
         self.sync_title_bar();
 
+        // The folder picker is a modal too, and it opens from Ajustes rather than from the list,
+        // so its Esc cannot live inside the list-only block below.
+        if self.state.pending_transfer.is_some() && ctx.input(|i| i.key_pressed(egui::Key::Escape))
+        {
+            self.state.cancel_pending_transfer();
+        }
+
         // Esc backs out of whatever is on top: a pending confirmation first, then a selection.
         // egui reports it as a physical key, so it works the same on a keyboard that prints "Esc",
         // "Escape" or nothing at all. Deliberately limited to the list — in the editor it would
@@ -2159,7 +2602,7 @@ impl eframe::App for EspansoManagerApp {
 
         // The X hides to the tray rather than quitting — except when the tray's own Quit item is
         // what asked for the close, which is the one way out of the program.
-        if ctx.input(|i| i.viewport().close_requested()) && !self.quitting {
+        if ctx.input(|i| i.viewport().close_requested()) && !self.quitting && !crate::EXPERIMENTAL {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.hide_to_tray();
         }
@@ -2174,6 +2617,16 @@ impl eframe::App for EspansoManagerApp {
         // whole current view, so it is the expensive case, and two seconds is already lazy.
         let is_visible = self.window.as_ref().and_then(|w| w.is_visible()).unwrap_or(true);
         if is_visible {
+            // Windows can leave this thread with no keyboard focus while the window is still
+            // visible and active, and then nothing typed reaches the text box the person just
+            // clicked. `restore_keyboard_focus` explains what that state is and why clicking
+            // cannot get out of it; the reason it is checked from here, every frame the window is
+            // up, is that the repair has to arrive without being asked for. It costs one syscall,
+            // so with the window idle it lands on the heartbeat below, and the instant anything is
+            // clicked or typed it lands on that frame instead.
+            if let Some(hwnd) = self.window.as_deref().and_then(hwnd_of) {
+                crate::display::restore_keyboard_focus(hwnd);
+            }
             ctx.request_repaint_after(VISIBLE_POLL_INTERVAL);
         } else if let Some(until) = self.tray.timed_pause_deadline() {
             ctx.request_repaint_after(until.saturating_duration_since(Instant::now()));
@@ -2184,24 +2637,50 @@ impl eframe::App for EspansoManagerApp {
         // `show_collapsible` slides the panel in/out and correctly shrinks the space given to
         // everything below it as it animates, so the banner appearing or disappearing never
         // overlaps the rest of the interface — it always pushes it, never covers it.
-        let mut banner_expanded = self.state.banner.is_some();
+        if self.state.banner.is_some() {
         egui::Panel::top("banner")
             .show_separator_line(false)
-            .show_collapsible(ui, &mut banner_expanded, |ui| {
+            .show(ui, |ui| {
                 self.show_banner(ui);
             });
+        }
 
-        egui::CentralPanel::default().show(ui, |ui| match &self.state.view {
+        // The pause state belongs to the tray; the library only shows it. Copied in before the
+        // frame is drawn and the request read back after, so a view never holds the tray and never
+        // runs `espanso` itself. See [`AppState::paused`].
+        self.state.paused = self.tray.is_paused();
+
+        // The gutter is the first thing that gives on a narrow window — before any control is
+        // allowed to shrink. See [`ui::controls::page_margin`].
+        let gutter = ui::controls::page_margin(ui.available_width());
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::default()
+                    .fill(win_background(self.is_light))
+                    .inner_margin(egui::Margin::symmetric(gutter, gutter.saturating_sub(4))),
+            )
+            .show(ui, |ui| match &self.state.view {
             View::List => ui::list_view::show(ui, &mut self.state),
             View::Edit(_) => ui::edit_form::show(ui, &mut self.state),
             View::Settings => ui::settings_view::show(ui, &mut self.state),
             View::Tips => ui::tips_view::show(ui, &mut self.state),
             View::Onboarding => ui::onboarding_view::show(ui, &mut self.state),
+            View::FolderOptions(_) => ui::folder_view::show(ui, &mut self.state),
         });
 
-        if matches!(self.state.view, View::List) {
-            ui::list_view::show_selection_bar(ui.ctx(), &mut self.state);
-        }
+        ui::list_view::show_move_modal(ui.ctx(), &mut self.state);
+        ui::list_view::show_create_folder_modal(ui.ctx(), &mut self.state);
         ui::list_view::show_pending_confirm(ui.ctx(), &mut self.state);
+        ui::settings_view::show_folder_picker(ui.ctx(), &mut self.state);
+
+        if std::mem::take(&mut self.state.pause_toggle_requested) {
+            let t = self.state.t();
+            let toggled = self.tray.toggle(&self.state.ctl, t);
+            self.state.espanso_confirmed = toggled.is_ok();
+            if let Err(e) = toggled {
+                self.state.set_error_banner(e);
+            }
+            self.state.paused = self.tray.is_paused();
+        }
     }
 }

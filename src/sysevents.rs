@@ -17,7 +17,7 @@
  * along with EspansoManager.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-//! Hearing about appearance changes from Windows instead of asking it repeatedly.
+//! Hearing about appearance and display changes from Windows instead of asking repeatedly.
 //!
 //! Windows announces a light/dark switch and an accent-colour change by broadcasting messages to
 //! every **top-level** window. Receiving them needs a window and a message loop, and eframe owns
@@ -55,6 +55,7 @@ const WM_SETTINGCHANGE: u32 = 0x001A;
 const WM_THEMECHANGED: u32 = 0x031A;
 /// Sent by the desktop window manager when the user picks a different accent colour.
 const WM_DWMCOLORIZATIONCOLORCHANGED: u32 = 0x0320;
+const WM_DISPLAYCHANGE: u32 = 0x007E;
 
 /// The name Windows uses for "the light/dark and accent colour set changed".
 const IMMERSIVE_COLOR_SET: &str = "ImmersiveColorSet";
@@ -199,8 +200,11 @@ unsafe extern "system" fn wndproc(
     lparam: LPARAM,
 ) -> LRESULT {
     let appearance_changed = match message {
-        WM_DWMCOLORIZATIONCOLORCHANGED | WM_THEMECHANGED => true,
-        WM_SETTINGCHANGE => is_immersive_color_set(lparam),
+        WM_DWMCOLORIZATIONCOLORCHANGED | WM_THEMECHANGED | WM_DISPLAYCHANGE => true,
+        // Work-area and contrast changes can alter the tray's size/colours without changing the
+        // app palette. SPI_SETLOGICALDPIOVERRIDE is used by Windows' display-scale setting.
+        WM_SETTINGCHANGE => is_immersive_color_set(lparam)
+            || matches!(wparam.0, 0x002F | 0x0043 | 0x009F),
         _ => false,
     };
 
