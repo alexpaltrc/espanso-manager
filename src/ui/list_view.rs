@@ -551,9 +551,9 @@ const DETAIL_MAX_HEIGHT: f32 = 180.0;
 pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     begin_hover_frame(ui.ctx());
     // The screen is sized to the window, list included, so normally this never scrolls. It exists
-    // for the one case no fixed size can cover: folder chips wrap onto as many rows as there are
-    // folders, and on a short window the rows above the list can leave less than the list's
-    // minimum. Then the page scrolls rather than pushing the footer out through the bottom edge.
+    // for what no fixed size can cover — a banner, a picking bar and two rows of chips all at once
+    // on the smallest window can leave less than the list's minimum. Then the page scrolls rather
+    // than pushing the footer out through the bottom edge.
     let page_height = ui.available_height();
     controls::page_scroll(ui, "library-page", |ui| page(ui, state, page_height));
 
@@ -652,19 +652,23 @@ fn title_row(ui: &mut egui::Ui, state: &mut AppState, is_light: bool) {
                 state.pause_toggle_requested = true;
             }
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                ui.add(
-                    egui::Label::new(controls::h2(studio::text(
-                        state,
-                        "Tus expansiones",
-                        "Your expansions",
-                        "Mga expansion mo",
-                        "आपके विस्तार",
-                    )))
-                    .truncate(),
-                )
-                .on_hover_text(t.app_title);
+                let heading = studio::text(
+                    state,
+                    "Tus expansiones",
+                    "Your expansions",
+                    "Mga expansion mo",
+                    "आपके विस्तार",
+                );
+                let title = ui
+                    .add(egui::Label::new(controls::h2(heading)).truncate())
+                    .on_hover_text(t.app_title);
+                // A label's text starts at the top of its rect, so the heading's baseline is that
+                // top plus the baseline of the same words laid out on their own.
+                let line =
+                    controls::widget_line(ui, controls::h2(heading), egui::TextStyle::Body);
+                let title_baseline = title.rect.top() + controls::baseline(&line);
                 ui.add_space(controls::GAP_ROW);
-                status_pill(ui, state, paused, is_light);
+                status_pill(ui, state, paused, is_light, title.rect.height(), title_baseline);
             });
         });
     });
@@ -675,7 +679,21 @@ fn title_row(ui: &mut egui::Ui, state: &mut AppState, is_light: bool) {
 ///
 /// "Activo" is only said once espanso has actually replied (see [`AppState::espanso_confirmed`]);
 /// a daemon that never answered is not described as running because nobody paused it.
-fn status_pill(ui: &mut egui::Ui, state: &AppState, paused: bool, is_light: bool) {
+///
+/// The word stands on the heading's baseline, `baseline`, rather than being centred on the
+/// heading's line: centred, its smaller type sat five points above the heading's. See
+/// [`controls::baseline`]. The dot stands on the same baseline and reaches the word's capitals.
+fn status_pill(
+    ui: &mut egui::Ui,
+    state: &AppState,
+    paused: bool,
+    is_light: bool,
+    height: f32,
+    baseline: f32,
+) {
+    const DOT: f32 = 9.0;
+    /// Segoe UI's capitals are seven tenths of its size.
+    const CAP_HEIGHT: f32 = 0.7;
     let (colour, label) = if !state.espanso_confirmed {
         (
             crate::app::danger(is_light),
@@ -692,14 +710,22 @@ fn status_pill(ui: &mut egui::Ui, state: &AppState, paused: bool, is_light: bool
             studio::text(state, "Activo", "Active", "Aktibo", "सक्रिय"),
         )
     };
-    let response = ui
-        .horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = controls::GAP_TIGHT + 2.0;
-            let (dot, _) = ui.allocate_exact_size(egui::Vec2::splat(9.0), egui::Sense::hover());
-            ui.painter().circle_filled(dot.center(), 4.0, colour);
-            ui.label(egui::RichText::new(label).small().color(colour));
-        })
-        .response;
+    let gap = controls::GAP_TIGHT + 2.0;
+    let font = egui::TextStyle::Small.resolve(ui.style());
+    let cap = font.size * CAP_HEIGHT;
+    let word = ui.painter().layout_no_wrap(label.to_owned(), font, colour);
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(DOT + gap + word.size().x, height),
+        egui::Sense::hover(),
+    );
+    let painter = ui.painter();
+    painter.circle_filled(
+        egui::pos2(rect.left() + DOT * 0.5, baseline - cap * 0.5),
+        4.0,
+        colour,
+    );
+    let word_top = baseline - controls::baseline(&word);
+    painter.galley(egui::pos2(rect.left() + DOT + gap, word_top), word, colour);
     if !state.espanso_confirmed {
         let t = state.t();
         let why = studio::text(
@@ -792,21 +818,31 @@ fn folder_chips(
     let mut pick: Option<Option<String>> = None;
     let mut drop_on: Option<(Option<String>, std::sync::Arc<DragPayload>)> = None;
 
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = egui::vec2(controls::GAP_TIGHT + 3.0, controls::GAP);
+    let gap = egui::vec2(controls::GAP_TIGHT + 3.0, controls::GAP);
+    let all = studio::text(state, "Todos", "All", "Lahat", "सभी");
+    let counts: Vec<usize> = list
+        .folder_names
+        .iter()
+        .map(|folder| {
+            list.grouped
+                .iter()
+                .find(|(name, _)| name == folder)
+                .map_or(0, |(_, indices)| indices.len())
+        })
+        .collect();
+    let (shown, hidden) = chips_that_fit(ui, state, list, &counts, active, all, gap.x);
 
-        let all = studio::text(state, "Todos", "All", "Lahat", "सभी");
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = gap;
+
         if controls::chip(ui, all, Some(list.rows.len()), active.is_none()).clicked() {
             pick = Some(None);
         }
 
-        for folder in &list.folder_names {
-            let count = list
-                .grouped
-                .iter()
-                .find(|(name, _)| name == folder)
-                .map_or(0, |(_, indices)| indices.len());
-            let chip = controls::chip(ui, folder, Some(count), active.as_deref() == Some(folder));
+        for &i in &shown {
+            let folder = &list.folder_names[i];
+            let chip =
+                controls::chip(ui, folder, Some(counts[i]), active.as_deref() == Some(folder));
             drop_target(ui, &chip, is_light);
             if chip.clicked() {
                 pick = Some(Some(folder.clone()));
@@ -814,6 +850,34 @@ fn folder_chips(
             if let Some(payload) = chip.dnd_release_payload::<DragPayload>() {
                 drop_on = Some((Some(folder.clone()), payload));
             }
+        }
+
+        if !hidden.is_empty() {
+            let more = controls::chip(ui, &more_label(state, hidden.len()), None, false);
+            let widest = hidden
+                .iter()
+                .map(|&i| controls::chip_width(ui, &list.folder_names[i], Some(counts[i])))
+                .fold(more.rect.width(), f32::max);
+            // Always under the chip, scrolling in whatever the window has left below it: left to
+            // pick a side, egui opened it beside the chip, on top of the chips that follow.
+            let below = ui.ctx().content_rect().bottom() - more.rect.bottom() - controls::GAP_WIDE * 2.0;
+            let popup = egui::Popup::menu(&more)
+                .align(egui::RectAlign::BOTTOM_START)
+                .align_alternatives(&[])
+                .gap(controls::GAP_TIGHT)
+                .width(widest + controls::GAP_WIDE);
+            popup.show(|ui| {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                let tall = below.clamp(controls::FIELD_HEIGHT * 3.0, MORE_MAX_HEIGHT);
+                egui::ScrollArea::vertical().max_height(tall).show(ui, |ui| {
+                    for &i in &hidden {
+                        let folder = &list.folder_names[i];
+                        if controls::menu_row(ui, folder, counts[i], false).clicked() {
+                            pick = Some(Some(folder.clone()));
+                        }
+                    }
+                });
+            });
         }
 
         let chip = controls::chip(
@@ -854,6 +918,97 @@ fn folder_chips(
             state.set_info_banner(message);
         }
     }
+}
+
+/// The most rows the folder chips may take. Two is what the smallest window already spends on a
+/// handful of folders; past that, every extra row came out of the list, until with thirty folders
+/// on a small window the list was scrolled out of sight altogether.
+const CHIP_ROWS: usize = 2;
+
+/// How tall the flyout of folders without a chip may grow before it scrolls.
+const MORE_MAX_HEIGHT: f32 = 320.0;
+
+/// The chip that stands for the folders without one of their own: "12 más".
+fn more_label(state: &AppState, hidden: usize) -> String {
+    let words = studio::text(state, "{n} más", "{n} more", "{n} pa", "{n} और");
+    crate::i18n::fill(words, &[("n", &hidden.to_string())])
+}
+
+/// Which folders get a chip of their own and which wait behind "N más", as indices into
+/// `list.folder_names`, both in the list's own order.
+///
+/// Everything fits → everything shows. Otherwise the chips run in order until "Todos", those
+/// folders, "N más", "Sin carpeta" and "Nueva carpeta" fill [`CHIP_ROWS`] rows. The folder being
+/// looked at always keeps its chip, even when its turn falls after the cut: the chip in accent is
+/// the only thing on screen that says which folder the list is showing.
+fn chips_that_fit(
+    ui: &egui::Ui,
+    state: &AppState,
+    list: &ListCache,
+    counts: &[usize],
+    active: &Option<String>,
+    all: &str,
+    gap: f32,
+) -> (Vec<usize>, Vec<usize>) {
+    let t = state.t();
+    let room = ui.available_width();
+    let head = controls::chip_width(ui, all, Some(list.rows.len()));
+    let tail = [
+        controls::chip_width(ui, t.no_folder, Some(list.ungrouped.len())),
+        controls::button_width(ui, t.add_new_folder),
+    ];
+    let widths: Vec<f32> = list
+        .folder_names
+        .iter()
+        .zip(counts)
+        .map(|(folder, &count)| controls::chip_width(ui, folder, Some(count)))
+        .collect();
+    let every: Vec<usize> = (0..widths.len()).collect();
+
+    let rows = |shown: &[usize], more: Option<f32>| {
+        let run = std::iter::once(head)
+            .chain(shown.iter().map(|&i| widths[i]))
+            .chain(more)
+            .chain(tail);
+        rows_taken(run, room, gap)
+    };
+    if rows(&every, None) <= CHIP_ROWS {
+        return (every, Vec::new());
+    }
+
+    let looked_at = active
+        .as_deref()
+        .and_then(|name| list.folder_names.iter().position(|f| f == name));
+    for take in (0..widths.len()).rev() {
+        let mut shown: Vec<usize> = (0..take).collect();
+        if let Some(i) = looked_at.filter(|&i| i >= take) {
+            shown.push(i);
+        }
+        let hidden: Vec<usize> = every.iter().copied().filter(|i| !shown.contains(i)).collect();
+        let more = controls::chip_width(ui, &more_label(state, hidden.len()), None);
+        if rows(&shown, Some(more)) <= CHIP_ROWS || take == 0 {
+            return (shown, hidden);
+        }
+    }
+    (Vec::new(), every)
+}
+
+/// How many rows `horizontal_wrapped` needs for items of these widths: each goes on the current
+/// row if it fits in what is left of `room`, and starts the next one otherwise.
+fn rows_taken(widths: impl IntoIterator<Item = f32>, room: f32, gap: f32) -> usize {
+    let mut rows = 1;
+    let mut x: Option<f32> = None;
+    for w in widths {
+        x = Some(match x {
+            None => w,
+            Some(x) if x + gap + w <= room => x + gap + w,
+            Some(_) => {
+                rows += 1;
+                w
+            }
+        });
+    }
+    rows
 }
 
 /// Outlines a chip while something is being dragged, and lights it up when the pointer is over it,
@@ -927,7 +1082,15 @@ fn count_row(
                     ),
                     &[("n", &visible.to_string())],
                 );
-                ui.label(controls::small_muted(count, is_light));
+                // Given its room first and painted last, like the footer's caption: beside
+                // «Opciones de carpeta» it stands on that link's baseline. See [`controls::baseline`].
+                let caption = ui.painter().layout_no_wrap(
+                    count,
+                    egui::TextStyle::Small.resolve(ui.style()),
+                    crate::app::secondary_text(is_light),
+                );
+                let (slot, _) = ui.allocate_exact_size(caption.size(), egui::Sense::hover());
+                let mut top = slot.top();
 
                 // Only when a real folder is being looked at: there is nothing to rename, re-prefix,
                 // export or delete about "all" or about "no folder".
@@ -940,10 +1103,15 @@ fn count_row(
                         "Mga opsyon ng folder",
                         "फ़ोल्डर विकल्प",
                     );
-                    if controls::button(ui, label, Tone::Quiet, true).clicked() {
+                    let options = controls::button(ui, label, Tone::Quiet, true);
+                    if options.clicked() {
                         state.view = View::FolderOptions(folder.to_owned());
                     }
+                    top = controls::button_baseline(ui, label, options.rect)
+                        - controls::baseline(&caption);
                 }
+                ui.painter()
+                    .galley(egui::pos2(slot.left(), top), caption, egui::Color32::PLACEHOLDER);
             });
         });
     });
@@ -1067,7 +1235,10 @@ fn footer(ui: &mut egui::Ui, state: &mut AppState, is_light: bool) {
     ui.add_space(controls::GAP_ROW);
     ui.horizontal(|ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.label(controls::small_muted(
+            // Given its room first, so the links can never crowd it out, but painted last: it
+            // stands on the links' baseline, which is only known once they are placed. Centred on
+            // the row instead, this smaller type sat a point above them. See [`controls::baseline`].
+            let caption = ui.painter().layout_no_wrap(
                 if crate::EXPERIMENTAL {
                     studio::text(
                         state,
@@ -1078,10 +1249,13 @@ fn footer(ui: &mut egui::Ui, state: &mut AppState, is_light: bool) {
                     )
                 } else {
                     concat!("Espanso Manager · ", env!("CARGO_PKG_VERSION"))
-                },
-                is_light,
-            ));
-            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                }
+                .to_owned(),
+                egui::TextStyle::Small.resolve(ui.style()),
+                crate::app::secondary_text(is_light),
+            );
+            let (slot, _) = ui.allocate_exact_size(caption.size(), egui::Sense::hover());
+            let links_baseline = controls::quiet_row(ui, |ui| {
                 let help = studio::text(
                     state,
                     "Guía rápida",
@@ -1089,10 +1263,9 @@ fn footer(ui: &mut egui::Ui, state: &mut AppState, is_light: bool) {
                     "Mabilis na gabay",
                     "त्वरित गाइड",
                 );
-                if controls::button(ui, help, Tone::Quiet, true)
-                    .on_hover_text(t.tips_button_tip)
-                    .clicked()
-                {
+                let guide =
+                    controls::button(ui, help, Tone::Quiet, true).on_hover_text(t.tips_button_tip);
+                if guide.clicked() {
                     state.view = View::Tips;
                 }
                 if controls::button(ui, t.settings_button, Tone::Quiet, true).clicked() {
@@ -1100,7 +1273,11 @@ fn footer(ui: &mut egui::Ui, state: &mut AppState, is_light: bool) {
                     state.refresh_autostart_cache();
                     state.ensure_espanso_version();
                 }
+                controls::button_baseline(ui, help, guide.rect)
             });
+            let top = links_baseline - controls::baseline(&caption);
+            ui.painter()
+                .galley(egui::pos2(slot.left(), top), caption, egui::Color32::PLACEHOLDER);
         });
     });
 }
@@ -1650,17 +1827,33 @@ fn closed_row(
                         // instead would move the start of the replacement from row to row, and a
                         // ragged second column is exactly what the two headings promise it isn't.
                         let spacing = ui.spacing().item_spacing.x;
-                        let used = ui
-                            .scope(|ui| {
-                                ui.set_max_width((pass.trigger_w - spacing).max(1.0));
-                                ui.add(
-                                    egui::Label::new(trigger_text).truncate().selectable(false),
-                                )
-                                .rect
-                                .width()
-                            })
-                            .inner;
-                        let padding = pass.trigger_w - used - spacing;
+                        // Laid out and truncated the way a label would be, but painted by hand, a
+                        // hair below centre: centred, the smaller monospace stood a point above the
+                        // replacement. See [`controls::baseline_drop`].
+                        let trigger = egui::WidgetText::from(trigger_text.clone()).into_galley(
+                            ui,
+                            Some(egui::TextWrapMode::Truncate),
+                            (pass.trigger_w - spacing).max(1.0),
+                            egui::TextStyle::Body,
+                        );
+                        let (slot, hover) =
+                            ui.allocate_exact_size(trigger.size(), egui::Sense::hover());
+                        let drop = controls::baseline_drop(
+                            ui,
+                            egui::RichText::new("x"),
+                            egui::RichText::new("x").monospace(),
+                        );
+                        let elided = trigger.elided;
+                        ui.painter().galley(
+                            slot.left_top() + egui::vec2(0.0, drop),
+                            trigger,
+                            egui::Color32::PLACEHOLDER,
+                        );
+                        // What the label did for a trigger too long for its column.
+                        if elided {
+                            hover.on_hover_text(trigger_text);
+                        }
+                        let padding = pass.trigger_w - slot.width() - spacing;
                         if padding > 0.0 {
                             ui.add_space(padding);
                         }
@@ -1999,7 +2192,7 @@ pub fn show_move_modal(ctx: &egui::Context, state: &mut AppState) {
             });
 
         ui.add_space(controls::GAP_STACK);
-        ui.horizontal(|ui| {
+        controls::quiet_row(ui, |ui| {
             if controls::button(ui, t.add_new_folder, Tone::Quiet, true).clicked() {
                 ui.ctx()
                     .data_mut(|d| d.insert_temp(create_folder_key(), String::new()));
@@ -2305,5 +2498,20 @@ pub fn show_pending_confirm(ctx: &egui::Context, state: &mut AppState) {
         state.confirm_pending_delete();
     } else if cancel {
         state.cancel_pending_confirm();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rows_taken;
+
+    #[test]
+    fn rows_wrap_like_horizontal_wrapped() {
+        assert_eq!(rows_taken([], 100.0, 10.0), 1);
+        // 40 + 10 + 50 is exactly the room: still one row.
+        assert_eq!(rows_taken([40.0, 50.0], 100.0, 10.0), 1);
+        assert_eq!(rows_taken([40.0, 51.0], 100.0, 10.0), 2);
+        // An item wider than the room gets a row to itself rather than an empty row before it.
+        assert_eq!(rows_taken([150.0, 20.0, 20.0], 100.0, 10.0), 2);
     }
 }

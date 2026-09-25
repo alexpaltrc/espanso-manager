@@ -299,7 +299,7 @@ pub fn show_folder_picker(ctx: &egui::Context, state: &mut AppState) {
         // as shortcuts over the chips rather than as two more folders.
         if show_bulk {
             ui.add_space(controls::GAP);
-            ui.horizontal(|ui| {
+            controls::quiet_row(ui, |ui| {
                 if controls::button(ui, t.transfer_pick_all, Tone::Quiet, true).clicked() {
                     for group in pending.groups.iter_mut() {
                         group.selected = true;

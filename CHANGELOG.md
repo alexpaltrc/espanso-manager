@@ -68,8 +68,32 @@ When it is, this heading becomes `## 0.0.2 — <date>` and the `-dev` comes off 
 - The **Delete** button in that warning is legible in light theme. It used to be nearly
   invisible.
 - Text being typed into a form survives cancelling that warning.
+- **The accent colour is Windows' own again** (2026-09-25). The new interface had fixed it to a
+  violet, and the code that read the system accent went unused and was removed. It is back: every
+  accent-coloured button, link, chip and ring takes the colour chosen in Windows' settings, in the
+  shade Windows itself uses for that theme.
+- **Darker dark theme.** The background is near black (`#030303`) and cards and controls are
+  `#242424`. The main text is `#E6E6E6` and supporting text is `#C8C8C8`. Hover, pressed and
+  line shades were moved down with them so the steps between them stay the same.
+- **The title bar uses Mica**, the Windows 11 material that takes a faint tint from the desktop
+  wallpaper. Windows only draws it while the window is active, and a solid-colour desktop gives it
+  nothing to tint with, so on such a desktop it looks the same as before. Versions of Windows
+  older than 11 ignore it.
+- **Folders take at most two rows.** Past that, the ones that do not fit wait behind a
+  "**12 more**" chip that opens a list of them with their counts. The folder being viewed always
+  keeps its chip. With thirty folders on the smallest window, the chips used to fill the screen and
+  push the list out of sight. Only folders with a chip can take a dropped expansion; for the rest,
+  there is **Move to folder**.
 
 ### Fixed
+
+- **Lines of text of different sizes now share a baseline** instead of being centred on each
+  other (2026-09-25). Folder counts no longer sit higher than the folder name. The
+  Active/Paused word is level with the heading instead of 5 px above it. A closed row's trigger
+  is level with its text. The footer note is level with its links.
+- **"Quick guide", "Back" and the other link-style buttons that start a line** now have their
+  first letter on the page's left edge, like every other line. Before, their invisible button
+  padding put them 14 px further in.
 
 - **Emptying a folder no longer deletes it.** A folder that existed only because of what was in
   it vanished when the last expansion was moved out. Folders like this came from an import or

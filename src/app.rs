@@ -1503,12 +1503,15 @@ impl AppState {
 
 // --- The palette ------------------------------------------------------------------------------
 //
-// One token set, defined once here, for every screen. The values are the ones the approved
-// renovation fixes (`output/ui-plan-2026-09-20.md`, §8), which start from Windows 11's own Fluent
-// ramp and then part from it in one deliberate way: **dark is not an inversion of light.** Its
-// surface sits *above* its background, its muted text is lighter rather than darker, and its accent
-// is a pale lilac instead of the saturated violet that light uses — a saturated accent on a dark
-// panel reads as a glow, not as a colour.
+// One token set, defined once here, for every screen. Light keeps the values the approved
+// renovation fixed (`output/ui-plan-2026-09-20.md`, §8). Dark was re-cut on 2026-09-24 to four
+// values chosen by hand: a near-black window, #242424 surfaces, #E6E6E6 text and #C8C8C8 for the
+// quieter half. The accent is not ours at all — it is the one the user picked in Windows, in the
+// shade Fluent assigns to each theme (see [`crate::theme::system_accent`]).
+//
+// **Dark is not an inversion of light.** Its surface sits *above* its background, its muted text is
+// lighter rather than darker, and its accent is a pale shade instead of the saturated one light
+// uses — a saturated accent on a dark panel reads as a glow, not as a colour.
 //
 // Everything below is a `fn(is_light)`, never a stored pair, so a frame can never be drawn half in
 // one theme and half in the other.
@@ -1522,7 +1525,7 @@ fn win_background(is_light: bool) -> egui::Color32 {
     if is_light {
         egui::Color32::from_rgb(0xF6, 0xF7, 0xFB)
     } else {
-        egui::Color32::from_rgb(0x1B, 0x1D, 0x24)
+        egui::Color32::from_rgb(0x03, 0x03, 0x03)
     }
 }
 
@@ -1535,7 +1538,20 @@ fn win_card(is_light: bool) -> egui::Color32 {
     if is_light {
         egui::Color32::from_rgb(0xFF, 0xFF, 0xFF)
     } else {
-        egui::Color32::from_rgb(0x24, 0x27, 0x30)
+        egui::Color32::from_rgb(0x24, 0x24, 0x24)
+    }
+}
+
+/// A label stamped *into* a card rather than raised off it — a folder's name shown as a tag.
+///
+/// In light that is simply the window's colour, a hair below the white card. In dark the window is
+/// nearly black, and a tag filled with it would read as a hole punched in the card; a third of the
+/// way from the card towards the window keeps the same single step down that light has.
+pub fn win_sunken_for(is_light: bool) -> egui::Color32 {
+    if is_light {
+        win_background(is_light)
+    } else {
+        mix(win_card(is_light), win_background(is_light), 0.3)
     }
 }
 
@@ -1557,7 +1573,7 @@ fn win_control_hover(is_light: bool) -> egui::Color32 {
     if is_light {
         egui::Color32::from_rgb(0xF0, 0xF1, 0xF5)
     } else {
-        egui::Color32::from_rgb(0x2E, 0x32, 0x3D)
+        egui::Color32::from_rgb(0x2E, 0x2E, 0x2E)
     }
 }
 
@@ -1566,7 +1582,7 @@ fn win_control_active(is_light: bool) -> egui::Color32 {
     if is_light {
         egui::Color32::from_rgb(0xE8, 0xE9, 0xEF)
     } else {
-        egui::Color32::from_rgb(0x35, 0x3A, 0x47)
+        egui::Color32::from_rgb(0x36, 0x36, 0x36)
     }
 }
 
@@ -1575,7 +1591,7 @@ fn win_stroke(is_light: bool) -> egui::Color32 {
     if is_light {
         egui::Color32::from_rgb(0xDC, 0xDF, 0xE8)
     } else {
-        egui::Color32::from_rgb(0x40, 0x46, 0x53)
+        egui::Color32::from_rgb(0x3D, 0x3D, 0x3D)
     }
 }
 
@@ -1584,7 +1600,7 @@ fn win_text(is_light: bool) -> egui::Color32 {
     if is_light {
         egui::Color32::from_rgb(0x24, 0x26, 0x30)
     } else {
-        egui::Color32::from_rgb(0xF0, 0xF1, 0xF7)
+        egui::Color32::from_rgb(0xE6, 0xE6, 0xE6)
     }
 }
 
@@ -1596,20 +1612,18 @@ fn win_text_secondary(is_light: bool) -> egui::Color32 {
     if is_light {
         egui::Color32::from_rgb(0x60, 0x65, 0x77)
     } else {
-        egui::Color32::from_rgb(0xB7, 0xBE, 0xCF)
+        egui::Color32::from_rgb(0xC8, 0xC8, 0xC8)
     }
 }
 
-/// The accent, in the shade this theme uses.
+/// The user's Windows accent, in the shade this theme uses.
 ///
-/// Called only when the palette is (re)built — never from drawing code. Widgets that need the
-/// accent read it back out of the palette with [`accent`], which is a field access.
+/// A registry read, so it is called only when the palette is (re)built — never from drawing code.
+/// Widgets that need the accent read it back out of the palette with [`accent`], which is a field
+/// access.
 fn read_system_accent(is_light: bool) -> egui::Color32 {
-    if is_light {
-        egui::Color32::from_rgb(0x64, 0x45, 0xC0)
-    } else {
-        egui::Color32::from_rgb(0xC4, 0xAF, 0xFF)
-    }
+    let (r, g, b) = crate::theme::system_accent(is_light);
+    egui::Color32::from_rgb(r, g, b)
 }
 
 /// The accent colour currently in use.
@@ -1896,11 +1910,26 @@ pub fn readable_on(background: egui::Color32) -> egui::Color32 {
     }
 }
 
+/// What every tint is mixed *from*.
+///
+/// In light the window and a card are a hair apart, so it never mattered which one a tint started
+/// from. In dark they are far apart — the window is nearly black, the card is #242424 — and a tint
+/// mixed from the window came out *darker* than the card it is drawn on: a selected row read as a
+/// hole cut into the list instead of a highlight on it. Starting from the card keeps every tint
+/// above the surfaces it sits on, on the card and on the window alike.
+pub fn tint_base(is_light: bool) -> egui::Color32 {
+    if is_light {
+        win_background(is_light)
+    } else {
+        win_card(is_light)
+    }
+}
+
 /// The tint a selected row sits on: the surface pulled towards the accent, far enough to be
 /// unmistakable and not so far that the trigger written in that same accent stops standing out.
 pub fn selection_tint(is_light: bool, accent: egui::Color32) -> egui::Color32 {
     mix(
-        win_background(is_light),
+        tint_base(is_light),
         accent,
         if is_light { 0.075 } else { 0.16 },
     )
@@ -1910,7 +1939,7 @@ pub fn selection_tint(is_light: bool, accent: egui::Color32) -> egui::Color32 {
 /// so "where my mouse is" never competes with "what I have chosen".
 pub fn hover_tint(is_light: bool) -> egui::Color32 {
     mix(
-        win_background(is_light),
+        tint_base(is_light),
         win_text(is_light),
         if is_light { 0.05 } else { 0.07 },
     )
@@ -2020,6 +2049,17 @@ impl EspansoManagerApp {
         let text_scale = work_area.map_or(1.0, |a| crate::display::text_scale(a.height));
         apply_layout_style(&cc.egui_ctx, text_scale);
         apply_theme(&cc.egui_ctx, window.as_deref(), is_light);
+        // The title bar is the one strip of this window that Windows draws, and on Windows 11 it can
+        // wear Mica — the wallpaper, blurred and tinted to the theme — as Explorer's and Settings'
+        // do. Only the title bar shows it: egui paints the whole client area, opaque, over the rest.
+        // Set once, because DWM keeps it on the window for life, hidden in the tray or not, and
+        // tints it light or dark from the theme `apply_theme` has just given the window. Like every
+        // Mica bar it goes solid while another window is active. A Windows older than build 22523
+        // ignores the request, and the bar stays the solid colour it always was.
+        if let Some(window) = window.as_deref() {
+            use winit::platform::windows::{BackdropType, WindowExtWindows as _};
+            window.set_system_backdrop(BackdropType::MainWindow);
+        }
         let font_status = fonts::install(&cc.egui_ctx, ctx.settings.lang == Lang::Hi);
 
         // Whoever owns Alt+Space also owns the search window, and only one of us can.

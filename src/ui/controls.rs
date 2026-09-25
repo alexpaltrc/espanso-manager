@@ -52,7 +52,7 @@
 
 use crate::app::{
     accent, danger, hairline, hover_tint, line_strong, mix, readable_on, secondary_text,
-    selection_tint, win_background_for, win_card_for, win_control_for,
+    selection_tint, tint_base, win_card_for, win_control_for, win_sunken_for,
 };
 
 /// Height of a text field and of one segment, before the container's own 2-point margin. Matches
@@ -103,9 +103,12 @@ pub fn page_margin(width: f32) -> i8 {
     if width < NARROW { PAGE_MARGIN_NARROW } else { PAGE_MARGIN }
 }
 
-/// How far a page's scroll area reaches into the gutter: enough on the left for a card's stroke,
-/// and on the right for the stroke plus the scroll bar at its widest (10 px) and a gap before it.
-const PAGE_OUTLINE_ROOM: i8 = 2;
+/// How far a page's scroll area reaches into the gutter. On the left, enough for a quiet button
+/// that [`quiet_row`] pulled into the gutter — its 14-point padding — plus the 3-point focus
+/// ring round it, so Tab can land on that button without the ring's left side being cut off; a
+/// card's stroke needs only 2 of those points. On the right, the stroke plus the scroll bar at its
+/// widest (10 px) and a gap before it.
+const PAGE_OUTLINE_ROOM: i8 = 17;
 const PAGE_BAR_ROOM: i8 = 14;
 
 /// The vertical scroll area a whole screen scrolls in.
@@ -115,8 +118,9 @@ const PAGE_BAR_ROOM: i8 = 14;
 /// right. And egui's floating bar is drawn inside the same rect, over the cards' edge. Both are
 /// fixed the same way: the area is widened into the gutter, and the same amount is handed back as
 /// `content_margin`. The content is exactly as wide as before, its outlines are inside the clip,
-/// and the bar floats in the gutter beside the cards instead of on them. Both gutters are wider
-/// than the room taken (`PAGE_MARGIN_NARROW` is 16).
+/// and the bar floats in the gutter beside the cards instead of on them. The ordinary gutter is
+/// wider than the room taken on either side; the narrow one (`PAGE_MARGIN_NARROW`, 16) is a point
+/// short on the left, and that point lies outside the window, where it is clipped anyway.
 pub fn page_scroll<R>(
     ui: &mut egui::Ui,
     id_salt: impl std::hash::Hash + std::fmt::Debug,
@@ -186,6 +190,18 @@ pub fn field_label(text: impl Into<String>) -> egui::RichText {
     egui::RichText::new(text).strong()
 }
 
+/// How far below a laid-out text's top edge its first line's baseline sits.
+///
+/// Two sizes of text side by side belong on one baseline, and centring their boxes does not put
+/// them there: a font's baseline sits below the middle of its line, so of two centred lines the
+/// smaller one's baseline lands higher. That is how a folder's count came to float above its name,
+/// and the status word above the heading beside it. Measure both and move the smaller one.
+pub fn baseline(galley: &egui::Galley) -> f32 {
+    galley.rows.first().map_or(galley.size().y, |row| {
+        row.pos.y + row.glyphs.first().map_or(row.size.y, |glyph| glyph.pos.y)
+    })
+}
+
 // --- Page chrome ------------------------------------------------------------------------------
 
 /// The top of every screen that is not the library: one step back, the screen's name, and a line
@@ -199,7 +215,7 @@ pub fn field_label(text: impl Into<String>) -> egui::RichText {
 /// on every machine and in all four alphabets, and the word alone has never been ambiguous.
 pub fn page_header(ui: &mut egui::Ui, back: &str, title: &str, subtitle: &str) -> bool {
     let is_light = !ui.visuals().dark_mode;
-    let leaving = button(ui, back, Tone::Quiet, true).clicked();
+    let leaving = quiet_row(ui, |ui| button(ui, back, Tone::Quiet, true).clicked());
     ui.add_space(GAP_WIDE);
     ui.add(egui::Label::new(h2(title)).wrap());
     if !subtitle.is_empty() {
@@ -231,11 +247,11 @@ pub fn inset_frame(ui: &egui::Ui) -> egui::Frame {
         .inner_margin(egui::Margin::same(14))
 }
 
-/// A folder's name shown as a label. Sits on the *window* colour, not the card's, so it reads as
-/// stamped into the surface rather than raised off it.
+/// A folder's name shown as a label. Sits a step *below* the card's colour, so it reads as stamped
+/// into the surface rather than raised off it.
 pub fn tag_frame(is_light: bool) -> egui::Frame {
     egui::Frame::default()
-        .fill(win_background_for(is_light))
+        .fill(win_sunken_for(is_light))
         .stroke(egui::Stroke::new(1.0, hairline(is_light)))
         .corner_radius(RADIUS_TAG)
         .inner_margin(egui::Margin::symmetric(8, 3))
@@ -363,7 +379,89 @@ pub fn button(ui: &mut egui::Ui, label: &str, tone: Tone, enabled: bool) -> egui
     response
 }
 
+/// A row, like `ui.horizontal`, that starts a button's padding early, so that a [`Tone::Quiet`]
+/// button opening it has its *word* on the edge where every other line's first word starts.
+///
+/// A quiet button has neither fill nor border, so its padding is invisible: all that showed was its
+/// word sitting 14 points further in than the text above and below it. Only for a row that opens
+/// with a quiet button — an outlined button's box belongs on the edge, and in the middle of a row
+/// the padding is the gap to its neighbour.
+///
+/// Not a negative `add_space`: egui widens a `Ui` to take in everything placed in it, and that
+/// widening climbs to the parent, which then starts every later line at the new, further-left
+/// edge. The whole screen under a «Volver» slid 14 points left. So the row lives in a child that
+/// starts in the gutter, and the parent is told only about the part from its own edge on.
+pub fn quiet_row<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let edge = ui.available_rect_before_wrap();
+    let pad = ui.spacing().button_padding.x;
+    let room = egui::Rect::from_min_size(
+        egui::pos2(edge.left() - pad, edge.top()),
+        egui::vec2(edge.width() + pad, ui.spacing().interact_size.y),
+    );
+    let mut row = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(room)
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    let inner = add(&mut row);
+    let mut used = row.min_rect();
+    used.min.x = used.min.x.max(edge.left());
+    ui.advance_cursor_after_rect(used);
+    inner
+}
+
+/// Where the words of a [`button`] labelled `label` stand, given the rect it was drawn in — for
+/// setting smaller text beside a row of buttons on the same line. See [`baseline`].
+///
+/// egui centres a button's words within its padding, which is the same above and below, so they
+/// sit centred in the whole rect. That holds in a layout whose cross alignment is centred, which
+/// is every row of buttons here.
+pub fn button_baseline(ui: &egui::Ui, label: &str, rect: egui::Rect) -> f32 {
+    let words = egui::RichText::new(label).family(crate::fonts::icons_family());
+    let line = widget_line(ui, words, egui::TextStyle::Body);
+    rect.center().y - line.size().y * 0.5 + baseline(&line)
+}
+
+/// How far to lower text styled like `smaller`, centred on a row beside text styled like `larger`,
+/// for the two to stand on one baseline. See [`baseline`].
+///
+/// Only the two styles decide it, never the words: each font's baseline lands a fixed distance from
+/// the middle of a centred line. So the styles are measured on a plain letter. The real words could
+/// open with a symbol borrowed from another font, and that glyph would stand somewhere else.
+pub fn baseline_drop(ui: &egui::Ui, larger: egui::RichText, smaller: egui::RichText) -> f32 {
+    let below_middle = |style: egui::RichText| {
+        let line = widget_line(ui, style, egui::TextStyle::Body);
+        baseline(&line) - line.size().y * 0.5
+    };
+    below_middle(larger) - below_middle(smaller)
+}
+
+/// `text` laid out exactly the way a label or a button lays out its own words, for measuring one.
+///
+/// Not `Painter::layout_no_wrap`: widgets set their text with `valign` centred, and a painter
+/// layout's is at the bottom. The line's height is rounded to whole pixels and `valign` shares out
+/// the difference, so the two can put the same words' baseline a pixel apart — which is the whole
+/// of what [`baseline`] is there to get right. `fallback` is the style the widget falls back on:
+/// the body text for a button, as egui 0.36 gives it.
+pub fn widget_line(
+    ui: &egui::Ui,
+    text: egui::RichText,
+    fallback: egui::TextStyle,
+) -> std::sync::Arc<egui::Galley> {
+    egui::WidgetText::from(text).into_galley(
+        ui,
+        Some(egui::TextWrapMode::Extend),
+        f32::INFINITY,
+        fallback,
+    )
+}
+
 // --- Chips and checkboxes ----------------------------------------------------------------------
+
+/// Space between a chip's edge and its words.
+const CHIP_PAD_X: f32 = 11.0;
+/// Space between a chip's name and its count.
+const CHIP_COUNT_GAP: f32 = 5.0;
 
 /// One folder filter: a rectangle with the folder's name and, when there is one, its count.
 ///
@@ -376,8 +474,6 @@ pub fn chip(
     count: Option<usize>,
     selected: bool,
 ) -> egui::Response {
-    const PAD_X: f32 = 11.0;
-    const COUNT_GAP: f32 = 5.0;
 
     let is_light = !ui.visuals().dark_mode;
     let accent_color = accent(ui.visuals());
@@ -396,9 +492,9 @@ pub fn chip(
             .layout_no_wrap(n.to_string(), count_font, secondary_text(is_light))
     });
 
-    let mut width = name.size().x + PAD_X * 2.0;
+    let mut width = name.size().x + CHIP_PAD_X * 2.0;
     if let Some(tally) = &tally {
-        width += COUNT_GAP + tally.size().x;
+        width += CHIP_COUNT_GAP + tally.size().x;
     }
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(width, FIELD_HEIGHT), egui::Sense::click());
@@ -421,24 +517,82 @@ pub fn chip(
             egui::StrokeKind::Inside,
         );
 
-        let mut x = rect.left() + PAD_X;
+        let mut x = rect.left() + CHIP_PAD_X;
         let name_size = name.size();
-        painter.galley(
-            egui::pos2(x, rect.center().y - name_size.y * 0.5),
-            name,
-            ink,
-        );
-        x += name_size.x + COUNT_GAP;
+        let name_top = rect.center().y - name_size.y * 0.5;
+        let name_baseline = name_top + baseline(&name);
+        painter.galley(egui::pos2(x, name_top), name, ink);
+        x += name_size.x + CHIP_COUNT_GAP;
         if let Some(tally) = tally {
-            let size = tally.size();
-            painter.galley(
-                egui::pos2(x, rect.center().y - size.y * 0.5),
-                tally,
-                secondary_text(is_light),
-            );
+            // On the name's baseline rather than centred beside it. See [`baseline`].
+            let top = name_baseline - baseline(&tally);
+            painter.galley(egui::pos2(x, top), tally, secondary_text(is_light));
         }
     }
 
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    focus_ring(ui, &response, f32::from(RADIUS_CONTROL));
+    response
+}
+
+/// The width [`chip`] will ask for, known before anything is allocated — so a row of chips can be
+/// planned before any of it is drawn.
+pub fn chip_width(ui: &egui::Ui, label: &str, count: Option<usize>) -> f32 {
+    let painter = ui.painter();
+    let name = painter.layout_no_wrap(
+        label.to_owned(),
+        egui::TextStyle::Button.resolve(ui.style()),
+        egui::Color32::PLACEHOLDER,
+    );
+    let tally = count.map_or(0.0, |n| {
+        let font = egui::TextStyle::Small.resolve(ui.style());
+        CHIP_COUNT_GAP + painter.layout_no_wrap(n.to_string(), font, egui::Color32::PLACEHOLDER).size().x
+    });
+    name.size().x + CHIP_PAD_X * 2.0 + tally
+}
+
+/// The width [`button`] will ask for: its words, in the family it pins them to, plus its padding.
+pub fn button_width(ui: &egui::Ui, label: &str) -> f32 {
+    let text = egui::RichText::new(label).family(crate::fonts::icons_family());
+    widget_line(ui, text, egui::TextStyle::Button).size().x + ui.spacing().button_padding.x * 2.0
+}
+
+/// One line of a flyout list: a name, and a count at the far end standing on the name's baseline.
+/// The chip's words in a menu's shape, for the things a row of chips had no room for.
+pub fn menu_row(ui: &mut egui::Ui, label: &str, count: usize, selected: bool) -> egui::Response {
+    let is_light = !ui.visuals().dark_mode;
+    let accent_color = accent(ui.visuals());
+    let ink = if selected { accent_color } else { ui.visuals().text_color() };
+    let name = ui.painter().layout_no_wrap(
+        label.to_owned(),
+        egui::TextStyle::Button.resolve(ui.style()),
+        ink,
+    );
+    let tally = ui.painter().layout_no_wrap(
+        count.to_string(),
+        egui::TextStyle::Small.resolve(ui.style()),
+        secondary_text(is_light),
+    );
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), FIELD_HEIGHT),
+        egui::Sense::click(),
+    );
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        if selected {
+            painter.rect_filled(rect, RADIUS_CONTROL, selection_tint(is_light, accent_color));
+        } else if response.hovered() {
+            painter.rect_filled(rect, RADIUS_CONTROL, hover_tint(is_light));
+        }
+        let name_top = rect.center().y - name.size().y * 0.5;
+        let name_baseline = name_top + baseline(&name);
+        let tally_left = rect.right() - CHIP_PAD_X - tally.size().x;
+        let tally_top = name_baseline - baseline(&tally);
+        painter.galley(egui::pos2(rect.left() + CHIP_PAD_X, name_top), name, ink);
+        painter.galley(egui::pos2(tally_left, tally_top), tally, secondary_text(is_light));
+    }
     if response.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
@@ -497,7 +651,7 @@ pub fn notice(ui: &mut egui::Ui, text: &str, tone: Tone) {
     };
 
     let fill = if matches!(tone, Tone::Danger) {
-        mix(win_background_for(is_light), bar, if is_light { 0.09 } else { 0.16 })
+        mix(tint_base(is_light), bar, if is_light { 0.09 } else { 0.16 })
     } else {
         selection_tint(is_light, accent_color)
     };
@@ -592,7 +746,7 @@ pub fn segment_background(ui: &egui::Ui, rect: egui::Rect, selected: bool, hover
             egui::Stroke::new(
                 1.0,
                 mix(
-                    win_background_for(is_light),
+                    tint_base(is_light),
                     accent_color,
                     if is_light { 0.28 } else { 0.32 },
                 ),

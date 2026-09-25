@@ -103,7 +103,9 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     controls::page_scroll(ui, ("folder-options", &folder), |ui| {
             // No chevron in front of it. A glyph here would have to be one the icon family really
             // draws on every machine, and the word alone has never been ambiguous.
-            if controls::button(ui, t.back, Tone::Quiet, true).clicked() {
+            if controls::quiet_row(ui, |ui| controls::button(ui, t.back, Tone::Quiet, true))
+                .clicked()
+            {
                 go_back = true;
             }
             ui.add_space(controls::GAP_WIDE);
