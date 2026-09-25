@@ -34,6 +34,8 @@
 use crate::app::{AppState, View};
 use super::{controls, studio};
 use super::studio::text;
+use super::keys;
+use super::glyphs::{self, Glyph};
 
 /// One task: a heading you can open, with the steps inside.
 ///
@@ -48,14 +50,44 @@ fn topic(ui: &mut egui::Ui, first: bool, title: &str, contents: impl FnOnce(&mut
         ui.separator();
         ui.add_space(controls::GAP_TIGHT);
     }
-    egui::CollapsingHeader::new(egui::RichText::new(title).strong())
-        .id_salt(title)
-        .show_unindented(ui, |ui| {
-            ui.add_space(controls::GAP);
-            contents(ui);
-            ui.add_space(controls::GAP_TIGHT);
-        });
+    // Drawn here rather than by egui's CollapsingHeader, whose triangle is nobody's icon family: the
+    // chevron is the one Windows puts on an expander, pointing where the answer will open.
+    let id = ui.make_persistent_id(("topic", title));
+    let mut open = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false);
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), controls::FIELD_HEIGHT),
+        egui::Sense::click(),
+    );
+    if ui.is_rect_visible(rect) {
+        let ink = ui.visuals().text_color();
+        ui.painter()
+            .rect_filled(rect, controls::RADIUS_CONTROL, controls::subtle_fill(ui, &response));
+        let icon = egui::Rect::from_min_size(
+            egui::pos2(rect.left() + controls::GAP, rect.center().y - CHEVRON * 0.5),
+            egui::Vec2::splat(CHEVRON),
+        );
+        let glyph = if open.is_open() { Glyph::ChevronDown } else { Glyph::ChevronRight };
+        glyphs::paint(ui, icon, glyph, CHEVRON, ink);
+        let words = controls::widget_line(ui, egui::RichText::new(title).strong(), egui::TextStyle::Body);
+        let at = egui::pos2(icon.right() + controls::GAP_ROW, rect.center().y - words.size().y * 0.5);
+        ui.painter()
+            .with_clip_rect(rect.intersect(ui.clip_rect()))
+            .galley(at, words, ink);
+        controls::focus_ring(ui, &response, f32::from(controls::RADIUS_CONTROL));
+    }
+    if response.clicked() {
+        open.toggle(ui);
+    }
+    open.show_body_unindented(ui, |ui| {
+        ui.add_space(controls::GAP);
+        contents(ui);
+        ui.add_space(controls::GAP_TIGHT);
+    });
 }
+
+/// The expander's chevron: smaller than a command's icon, because it marks a heading rather than
+/// being a button of its own.
+const CHEVRON: f32 = 12.0;
 
 /// A paragraph of a topic, in the reading colour. The guide is the one screen made entirely of
 /// prose; setting all of it in the supporting grey would make the whole page look like a footnote.
@@ -73,23 +105,11 @@ fn part(ui: &mut egui::Ui, title: &str, body: &str) {
 
 pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     let t = state.t();
-    let title = text(
-        state,
-        "¿Cómo te ayudamos?",
-        "How can we help?",
-        "Paano ka namin matutulungan?",
-        "हम आपकी कैसे मदद करें?",
-    );
-    let subtitle = text(
-        state,
-        "Elige lo que quieres hacer.",
-        "Choose what you want to do.",
-        "Piliin ang gusto mong gawin.",
-        "चुनें कि आप क्या करना चाहते हैं।",
-    );
+    // The name the «…» menu gave it, so the way in and the page agree about what this is.
+    let title = t.tips_button_tip;
     // Drawn above the scroll area on purpose: the way back must not be something you have to scroll
     // to the end of the guide to find.
-    if controls::page_header(ui, t.back, title, subtitle) {
+    if controls::page_header(ui, t.back, title, state.settings.lang) {
         state.view = View::List;
     }
     controls::page_scroll(ui, "quick-guide", |ui| {
@@ -97,7 +117,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
             // A cap, not a width: `set_max_width` takes the number as given.
             ui.set_max_width(ui.available_width().min(820.0));
             lead(ui, state);
-            ui.add_space(controls::GAP_SECTION);
+            ui.add_space(28.0);
             tasks(ui, state);
             // The window's own gutter is drawn around the scroll area, not inside it.
             ui.add_space(controls::GAP_STACK);
@@ -143,8 +163,7 @@ fn lead(ui: &mut egui::Ui, state: &mut AppState) {
     );
 
     let mut creating = false;
-    controls::section_frame(is_light).show(ui, |ui| {
-        ui.set_width(ui.available_width());
+    ui.vertical(|ui| {
         ui.add(egui::Label::new(controls::h3(heading)).wrap());
         ui.add_space(controls::GAP_TIGHT);
         ui.add(egui::Label::new(controls::muted(body, is_light)).wrap());
@@ -175,10 +194,7 @@ fn lead(ui: &mut egui::Ui, state: &mut AppState) {
 /// Everything else, one heading per task, in the order the plan lists them.
 fn tasks(ui: &mut egui::Ui, state: &AppState) {
     let t = state.t();
-    let is_light = !ui.visuals().dark_mode;
-    controls::section_frame(is_light).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-
+    ui.vertical(|ui| {
         topic(
             ui,
             true,
@@ -197,15 +213,16 @@ fn tasks(ui: &mut egui::Ui, state: &AppState) {
         let folders_body = crate::i18n::fill(
             text(
                 state,
-                "Los rectángulos de arriba filtran la biblioteca: {all}, {none} y cada una de tus carpetas. Usa {select} para marcar varias expansiones y moverlas de una vez, o arrastra una fila hasta el rectángulo de una carpeta. Con una carpeta filtrada aparece {options}, donde puedes cambiarle el nombre o el prefijo, exportarla o eliminarla.",
-                "The rectangles at the top filter the library: {all}, {none} and each of your folders. Use {select} to tick several expansions and move them at once, or drag a row onto a folder's rectangle. With a folder filtered you get {options}, where you can rename it, change its prefix, export it or delete it.",
-                "Sinasala ng mga parisukat sa itaas ang aklatan: {all}, {none} at bawat folder mo. Gamitin ang {select} para markahan ang ilang expansion at ilipat nang sabay, o i-drag ang isang row papunta sa parisukat ng folder. Kapag may na-filter na folder, lilitaw ang {options}, kung saan mababago ang pangalan o prefix, mai-e-export o matatanggal ito.",
-                "ऊपर के आयत लाइब्रेरी को छाँटते हैं: {all}, {none} और आपका हर फ़ोल्डर। एक साथ कई विस्तार ले जाने के लिए {select} से उन्हें चिह्नित करें, या किसी पंक्ति को फ़ोल्डर के आयत पर खींचें। कोई फ़ोल्डर छाँटा हो तो {options} दिखता है, जहाँ नाम या उपसर्ग बदल सकते हैं, निर्यात या हटा सकते हैं।",
+                "El selector {all}, junto al buscador, muestra solo una carpeta o {none}. Para mover varias expansiones de una vez, elige {select} en el menú «…»; para mover una sola, arrástrala hasta una carpeta o usa el menú de su detalle. En el mismo selector están {new} y {options}, donde puedes cambiarle el nombre o el prefijo, exportarla o eliminarla.",
+                "The {all} picker, beside the search box, shows just one folder or {none}. To move several expansions at once, choose {select} in the «…» menu; to move one, drag it onto a folder or use the menu in its detail. The same picker holds {new} and {options}, where you can rename a folder, change its prefix, export it or delete it.",
+                "Ang {all} na pagpipilian, katabi ng paghahanap, ay nagpapakita ng isang folder lang o {none}. Para maglipat ng ilang expansion nang sabay, piliin ang {select} sa menu na «…»; para sa isa, i-drag ito sa isang folder o gamitin ang menu sa detalye nito. Nasa parehong pagpipilian ang {new} at {options}, kung saan mapapalitan ang pangalan o prefix, mai-e-export o matatanggal ang folder.",
+                "खोज के बगल वाला {all} चयनकर्ता केवल एक फ़ोल्डर या {none} दिखाता है। एक साथ कई विस्तार ले जाने के लिए «…» मेनू में {select} चुनें; एक को ले जाने के लिए उसे फ़ोल्डर पर खींचें या उसके विवरण का मेनू इस्तेमाल करें। उसी चयनकर्ता में {new} और {options} हैं, जहाँ फ़ोल्डर का नाम या उपसर्ग बदल सकते हैं, निर्यात या हटा सकते हैं।",
             ),
             &[
-                ("all", text(state, "Todos", "All", "Lahat", "सभी")),
+                ("all", text(state, "Todas las carpetas", "All folders", "Lahat ng folder", "सभी फ़ोल्डर")),
                 ("none", t.no_folder),
-                ("select", text(state, "Seleccionar", "Select", "Pumili", "चुनें")),
+                ("select", text(state, "Seleccionar varias", "Select several", "Pumili ng ilan", "कई चुनें")),
+                ("new", t.add_new_folder.trim_start_matches(['+', ' ']).trim_end_matches('…')),
                 ("options", text(state, "Opciones de carpeta", "Folder options", "Mga opsyon ng folder", "फ़ोल्डर विकल्प")),
             ],
         );
@@ -267,10 +284,10 @@ fn tasks(ui: &mut egui::Ui, state: &AppState) {
         let pause_body = crate::i18n::fill(
             text(
                 state,
-                "El botón {pause} de la biblioteca detiene las expansiones sin cerrar nada, y el mismo botón las vuelve a activar. El punto de estado, junto al título, dice si Espanso está activo, en pausa o sin responder.",
-                "The {pause} button in the library stops expansions without closing anything, and the same button turns them back on. The status dot beside the title says whether Espanso is active, paused or not responding.",
-                "Pinapatigil ng {pause} na button sa aklatan ang mga expansion nang walang isinasara, at ibinabalik din ito ng parehong button. Sinasabi ng status dot sa tabi ng pamagat kung aktibo, naka-pause o hindi tumutugon ang Espanso.",
-                "लाइब्रेरी का {pause} बटन बिना कुछ बंद किए विस्तार रोक देता है, और वही बटन उन्हें फिर चालू करता है। शीर्षक के बगल का स्थिति बिंदु बताता है कि Espanso सक्रिय है, रुका हुआ है या जवाब नहीं दे रहा।",
+                "El botón {pause} de la biblioteca detiene las expansiones sin cerrar nada, y el mismo botón las vuelve a activar. El punto de estado, a la izquierda del título, dice si Espanso está activo, en pausa o sin responder.",
+                "The {pause} button in the library stops expansions without closing anything, and the same button turns them back on. The status dot to the left of the title says whether Espanso is active, paused or not responding.",
+                "Pinapatigil ng {pause} na button sa aklatan ang mga expansion nang walang isinasara, at ibinabalik din ito ng parehong button. Sinasabi ng status dot sa kaliwa ng pamagat kung aktibo, naka-pause o hindi tumutugon ang Espanso.",
+                "लाइब्रेरी का {pause} बटन बिना कुछ बंद किए विस्तार रोक देता है, और वही बटन उन्हें फिर चालू करता है। शीर्षक के बाईं ओर का स्थिति बिंदु बताता है कि Espanso सक्रिय है, रुका हुआ है या जवाब नहीं दे रहा।",
             ),
             &[("pause", t.tray_pause)],
         );
@@ -294,29 +311,7 @@ fn tasks(ui: &mut egui::Ui, state: &AppState) {
             ui,
             false,
             text(state, "Atajos de teclado", "Keyboard shortcuts", "Mga keyboard shortcut", "कीबोर्ड शॉर्टकट"),
-            |ui| {
-                let rows = [
-                    ("Ctrl+N", text(state, "Nueva expansión", "New expansion", "Bagong expansion", "नया विस्तार")),
-                    ("Ctrl+F", text(state, "Buscar en la biblioteca", "Search the library", "Maghanap sa aklatan", "लाइब्रेरी खोजें")),
-                    ("Ctrl+S", text(state, "Guardar en el editor", "Save in the editor", "I-save sa editor", "संपादक में सहेजें")),
-                    (
-                        "Ctrl",
-                        text(state, "Con clic, añade una expansión a la selección", "With a click, adds one expansion to the selection", "Kasama ang click, nagdaragdag ng isang expansion sa pinili", "क्लिक के साथ, चयन में एक विस्तार जोड़ता है"),
-                    ),
-                    (
-                        "Shift",
-                        text(state, "Con clic, selecciona todo el intervalo", "With a click, selects the whole range", "Kasama ang click, pinipili ang buong hanay", "क्लिक के साथ, पूरी श्रेणी चुनता है"),
-                    ),
-                ];
-                for (keys, meaning) in rows {
-                    let key = controls::code(keys, ui.visuals());
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(key);
-                        ui.add(egui::Label::new(meaning).wrap());
-                    });
-                    ui.add_space(controls::GAP_TIGHT);
-                }
-            },
+            |ui| shortcut_table(ui, state),
         );
 
         let search_body = crate::i18n::fill(t.tip_search_body, &[("keys", state.search_shortcut)]);
@@ -331,6 +326,74 @@ fn tasks(ui: &mut egui::Ui, state: &AppState) {
             },
         );
     });
+}
+
+/// Every shortcut the app answers to, printed from [`keys`] so the guide cannot drift from what the
+/// keys really do: rename a binding there and this row follows it.
+fn shortcut_table(ui: &mut egui::Ui, state: &AppState) {
+    let lang = state.settings.lang;
+    let or = text(state, "o", "or", "o", "या");
+    let rows: [(String, &str); 10] = [
+        (
+            keys::text(keys::NEW, lang),
+            text(state, "Nueva expansión", "New expansion", "Bagong expansion", "नया विस्तार"),
+        ),
+        (
+            format!("{} {or} {}", keys::text(keys::FIND, lang), keys::text(keys::FIND_ALT, lang)),
+            text(state, "Ir al buscador", "Go to the search box", "Pumunta sa paghahanap", "खोज बॉक्स पर जाएँ"),
+        ),
+        (
+            format!("{} {}", keys::text(keys::UP, lang), keys::text(keys::DOWN, lang)),
+            text(state, "Moverse por la lista", "Move through the list", "Gumalaw sa listahan", "सूची में चलें"),
+        ),
+        (
+            keys::text(keys::OPEN, lang),
+            text(state, "Editar la expansión abierta", "Edit the open expansion", "I-edit ang bukas na expansion", "खुला विस्तार संपादित करें"),
+        ),
+        (
+            keys::text(keys::DELETE, lang),
+            text(state, "Eliminar la expansión abierta, tras confirmar", "Delete the open expansion, after confirming", "Tanggalin ang bukas na expansion, pagkatapos kumpirmahin", "पुष्टि के बाद खुला विस्तार हटाएँ"),
+        ),
+        (
+            keys::text(keys::RENAME, lang),
+            text(state, "Opciones de la carpeta que estás viendo", "Options for the folder you are viewing", "Mga opsyon ng folder na tinitingnan mo", "जो फ़ोल्डर देख रहे हैं उसके विकल्प"),
+        ),
+        (
+            keys::text(keys::SAVE, lang),
+            text(state, "Guardar en el editor", "Save in the editor", "I-save sa editor", "संपादक में सहेजें"),
+        ),
+        (
+            keys::text(keys::BACK, lang),
+            text(state, "Cerrar el menú, el diálogo o el detalle; salir del editor", "Close the menu, the dialog or the detail; leave the editor", "Isara ang menu, dialog o detalye; umalis sa editor", "मेनू, संवाद या विवरण बंद करें; संपादक से निकलें"),
+        ),
+        (
+            keys::click_text(egui::Modifiers::CTRL, lang),
+            text(state, "Añadir una expansión a la selección", "Add one expansion to the selection", "Magdagdag ng isang expansion sa pinili", "चयन में एक विस्तार जोड़ें"),
+        ),
+        (
+            keys::click_text(egui::Modifiers::SHIFT, lang),
+            text(state, "Seleccionar todo el intervalo", "Select the whole range", "Piliin ang buong hanay", "पूरी श्रेणी चुनें"),
+        ),
+    ];
+    // The keys in one column, so the eye runs down them; the width of that column is the widest
+    // combination, so no meaning starts further right than it has to.
+    let key_width = rows
+        .iter()
+        .map(|(k, _)| controls::widget_line(ui, controls::code(k, ui.visuals()), egui::TextStyle::Body).size().x)
+        .fold(0.0_f32, f32::max);
+    for (combo, meaning) in &rows {
+        ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing.x = controls::GAP_WIDE;
+            let (slot, _) = ui.allocate_exact_size(
+                egui::vec2(key_width, ui.text_style_height(&egui::TextStyle::Body)),
+                egui::Sense::hover(),
+            );
+            let line = controls::widget_line(ui, controls::code(combo, ui.visuals()), egui::TextStyle::Body);
+            ui.painter().galley(slot.left_top(), line, egui::Color32::PLACEHOLDER);
+            ui.add(egui::Label::new(*meaning).wrap());
+        });
+        ui.add_space(controls::GAP_TIGHT);
+    }
 }
 
 /// A drawing of the notification area: the overflow flyout above, the taskbar below, and the icon

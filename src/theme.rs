@@ -131,3 +131,60 @@ pub fn contrast_colors() -> Option<([u8; 3], [u8; 3])> {
     let rgb = |c: u32| [c as u8, (c >> 8) as u8, (c >> 16) as u8];
     Some(unsafe { (rgb(GetSysColor(COLOR_WINDOW)), rgb(GetSysColor(COLOR_WINDOWTEXT))) })
 }
+
+/// The colours of the contrast theme the user picked, when one is on — each one a role Windows
+/// names, so the app can hand every role to the colour the user chose for it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ContrastPalette {
+    /// Behind text.
+    pub window: [u8; 3],
+    /// Text.
+    pub text: [u8; 3],
+    /// A chosen item, and the text on it.
+    pub highlight: [u8; 3],
+    pub highlight_text: [u8; 3],
+    /// Links — here, anything written in the accent.
+    pub hotlight: [u8; 3],
+    /// Disabled text.
+    pub gray: [u8; 3],
+    /// A button's face and its words.
+    pub button_face: [u8; 3],
+    pub button_text: [u8; 3],
+}
+
+/// The whole contrast palette, or `None` when no contrast theme is on.
+pub fn contrast_palette() -> Option<ContrastPalette> {
+    use windows::Win32::Graphics::Gdi::{
+        GetSysColor, COLOR_BTNFACE, COLOR_BTNTEXT, COLOR_GRAYTEXT, COLOR_HIGHLIGHT,
+        COLOR_HIGHLIGHTTEXT, COLOR_HOTLIGHT, COLOR_WINDOW, COLOR_WINDOWTEXT, SYS_COLOR_INDEX,
+    };
+    // The preview build can be shown a contrast theme without switching the whole machine to one:
+    // Windows 11's «Acuático», the palette its own contrast settings open on.
+    if cfg!(feature = "preview") && std::env::var_os("EM_PREVIEW_CONTRAST").is_some() {
+        return Some(ContrastPalette {
+            window: [0x20, 0x20, 0x20],
+            text: [0xFF, 0xFF, 0xFF],
+            highlight: [0x8E, 0xE3, 0xF0],
+            highlight_text: [0x26, 0x3B, 0x50],
+            hotlight: [0x75, 0xE9, 0xFC],
+            gray: [0xA6, 0xA6, 0xA6],
+            button_face: [0x20, 0x20, 0x20],
+            button_text: [0xFF, 0xFF, 0xFF],
+        });
+    }
+    contrast_colors()?;
+    let rgb = |index: SYS_COLOR_INDEX| {
+        let c = unsafe { GetSysColor(index) };
+        [c as u8, (c >> 8) as u8, (c >> 16) as u8]
+    };
+    Some(ContrastPalette {
+        window: rgb(COLOR_WINDOW),
+        text: rgb(COLOR_WINDOWTEXT),
+        highlight: rgb(COLOR_HIGHLIGHT),
+        highlight_text: rgb(COLOR_HIGHLIGHTTEXT),
+        hotlight: rgb(COLOR_HOTLIGHT),
+        gray: rgb(COLOR_GRAYTEXT),
+        button_face: rgb(COLOR_BTNFACE),
+        button_text: rgb(COLOR_BTNTEXT),
+    })
+}

@@ -24,6 +24,8 @@ pub mod controls;
 pub mod studio;
 pub mod date_blocks;
 pub mod edit_form;
+pub mod glyphs;
+pub mod keys;
 pub mod folder_view;
 pub mod list_view;
 pub mod onboarding_view;

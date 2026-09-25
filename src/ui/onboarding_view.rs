@@ -30,32 +30,51 @@
 
 //!
 //! **The one way forward is always on screen.** «Empezar» is laid out first, against the bottom
-//! edge, and the three cards scroll in what is left. On a short window the cards scroll; the button
+//! edge, and the three parts scroll in what is left. On a short window they scroll; the button
 //! never does, and never ends up half cut off by the frame.
 
 use crate::app::{AppState, View};
 use crate::ui::controls::{self, Tone};
-use crate::ui::studio::text;
 
 /// What the trial expansion produces. Espanso's own wording, kept deliberately: someone who later
 /// reads espanso's documentation should meet the same example.
 pub const PROBE_TRIGGER: &str = ":espanso";
 pub const PROBE_REPLACE: &str = "Hi there!";
 
+/// The welcome is read, not filled in: past this width the lines get too long to follow.
+const COLUMN_MAX_WIDTH: f32 = 720.0;
+
 pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     let t = state.t();
 
+    // One column, centred: the title, the text and «Empezar» all keep to it, so on a wide window
+    // the screen is a page with margins rather than three lines hugging the left edge.
+    let full = ui.available_width();
+    let width = full.min(COLUMN_MAX_WIDTH);
+    let margin = ((full - width) * 0.5).max(0.0);
+
     let mut starting = false;
     ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-        starting = controls::primary_button(ui, t.onboarding_start).clicked();
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            ui.add_space(margin);
+            starting = controls::primary_button(ui, t.onboarding_start).clicked();
+        });
         ui.add_space(controls::GAP_WIDE);
         ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
             controls::page_scroll(ui, "onboarding", |ui| {
-                    // A cap, not a width: `set_max_width` takes the number as given, so on a
-                    // window narrower than the cap the cards would run past the edge.
-                    ui.set_max_width(ui.available_width().min(720.0));
-                    cards(ui, state);
+                // Measured again inside: the scroll bar takes its share of the width.
+                let full = ui.available_width();
+                let width = full.min(COLUMN_MAX_WIDTH);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    ui.add_space(((full - width) * 0.5).max(0.0));
+                    ui.vertical(|ui| {
+                        ui.set_width(width);
+                        cards(ui, state);
+                    });
                 });
+            });
         });
     });
     if starting {
@@ -68,21 +87,14 @@ fn cards(ui: &mut egui::Ui, state: &mut AppState) {
     let t = state.t();
     let is_light = !ui.visuals().dark_mode;
 
-    controls::tag_frame(is_light).show(ui, |ui| {
-        ui.label(controls::small_muted(t.onboarding_title, is_light));
+    // The title stands where every other screen has its own, centred on the first row; the one
+    // line under it says what the app is for, and nothing more is said before the three parts.
+    ui.vertical_centered(|ui| {
+        ui.add(egui::Label::new(controls::h1(t.onboarding_title)).wrap());
     });
-    ui.add_space(controls::GAP_WIDE);
-    let headline = text(
-        state,
-        "Tus palabras, en un atajo.",
-        "Your words, in a shortcut.",
-        "Ang mga salita mo, sa isang shortcut.",
-        "आपके शब्द, एक शॉर्टकट में।",
-    );
-    ui.add(egui::Label::new(controls::h2(headline)).wrap());
-    ui.add_space(controls::GAP_TIGHT);
-    ui.add(egui::Label::new(controls::muted(t.onboarding_intro, is_light)).wrap());
     ui.add_space(controls::GAP_STACK);
+    ui.add(egui::Label::new(controls::muted(t.onboarding_intro, is_light)).wrap());
+    ui.add_space(PART_GAP);
 
     // --- 1. see it work --------------------------------------------------------------------------
     card(ui, t.onboarding_try_title, |ui| {
@@ -131,14 +143,15 @@ fn cards(ui: &mut egui::Ui, state: &mut AppState) {
     });
 }
 
-/// One step of the welcome, in the same card every other screen uses.
+/// Space between the three parts: the same pause the editor, the settings and the folder page use.
+const PART_GAP: f32 = 28.0;
+
+/// One part of the welcome: a heading and what belongs under it, with no card around them.
 fn card(ui: &mut egui::Ui, title: &str, contents: impl FnOnce(&mut egui::Ui)) {
-    let is_light = !ui.visuals().dark_mode;
-    controls::section_frame(is_light).show(ui, |ui| {
-        ui.set_width(ui.available_width());
+    ui.vertical(|ui| {
         ui.add(egui::Label::new(controls::h3(title)).wrap());
         ui.add_space(controls::GAP_ROW);
         contents(ui);
     });
-    ui.add_space(controls::GAP_SECTION);
+    ui.add_space(PART_GAP);
 }

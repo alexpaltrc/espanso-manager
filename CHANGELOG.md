@@ -25,6 +25,24 @@ When it is, this heading becomes `## 0.0.2 — <date>` and the `-dev` comes off 
 
 ### Changed
 
+- **A quieter interface, with the detail beside the list** (2026-09-25). This supersedes parts of
+  the 2026-09-22 interface described in the next entry:
+  - The library title is centred, with the real state of Espanso (a dot and **Active**,
+    **Paused** or **Not responding**) on its left, and three borderless commands on its right:
+    pause/resume, new, and a `…` menu. The search and an **All folders** menu sit under it, short
+    and centred. The folder rectangles are gone.
+  - Rows are the trigger in a monospaced face and a one-line preview, split by faint lines.
+    Choosing one opens an inspector on the right with the whole text (wrapped, scrollable, with
+    a copy button), its folder, **Edit** and a `…` menu for move and delete. On a narrow window
+    the inspector takes the place of the list, with **Back**.
+  - The editor, settings, the folder page, the guide and the welcome screen lost their cards,
+    numbers and subtitles: headings and space do the grouping. The editor asks before throwing
+    away unsaved changes.
+  - The move and export/import pickers are a list of folders with a check, the same lines as the
+    folder menu. A new folder is made with **Create**, not **Save**.
+  - Keyboard: Ctrl+N new, Ctrl+L or Ctrl+F search, arrows and Enter in the list, F2 folder
+    options, Del delete (always asked), Ctrl+S save, Esc backs out one layer at a time. None of
+    them act while text is being typed. Shortcuts are shown in tooltips, menus and the guide.
 - **A new interface, from the library to the last dialog** (2026-09-22). One central library
   with nothing permanently docked beside it:
   - The title shows what Espanso really answered, not what the app assumes. The pill reads

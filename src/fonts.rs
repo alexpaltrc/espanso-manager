@@ -17,13 +17,15 @@
  * along with EspansoManager.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-//! The two system faces egui does not bundle, loaded from `C:\Windows\Fonts` at runtime.
+//! The system faces the interface is set in, loaded from `C:\Windows\Fonts` at runtime.
 //!
 //! Nothing is embedded in the executable — a portable app that carried 8 MB of fonts would be a
-//! worse trade than reading them off the machine that is already holding them. egui's bundled face
-//! stays in charge of Latin; the Devanagari one is a last resort, and the symbols one is asked
-//! *before* the bundled emoji face, because Windows draws emoji better than the little face egui
-//! ships. The interface's own icons sit out of all of it in their own family — see [`install`].
+//! worse trade than reading them off the machine that is already holding them. Text is Segoe UI
+//! Variable, the face Windows 11 draws its own interface in, with plain Segoe UI behind it where
+//! it is missing; triggers are Cascadia Mono, or Consolas. The Devanagari face is a last resort,
+//! and the symbols one is asked *before* the bundled emoji face, because Windows draws emoji
+//! better than the little face egui ships. The interface's own icons sit out of all of it in their
+//! own family — see [`install`].
 //!
 //! Called again on every language change, which is the moment the Devanagari face is picked up or
 //! let go: it is 5.3 MB held for the life of the process, on a program that sits in the tray all
@@ -69,6 +71,58 @@ const SYMBOLS: &[&str] = &[
 /// point — see [`install`] for why a face read off the machine must not reach it.
 const ICONS: &str = "icons";
 
+/// Segoe UI Variable: one file, both weights. See [`install`].
+const TEXT_VARIABLE: &str = "C:\\Windows\\Fonts\\SegUIVar.ttf";
+/// Windows 10's pair, when the variable face is not there.
+const TEXT_REGULAR: &str = "C:\\Windows\\Fonts\\segoeui.ttf";
+const TEXT_SEMIBOLD: &str = "C:\\Windows\\Fonts\\seguisb.ttf";
+/// Windows 11's icon font, then Windows 10's.
+const FLUENT_ICONS: &[&str] = &[
+    "C:\\Windows\\Fonts\\SegoeIcons.ttf",
+    "C:\\Windows\\Fonts\\segmdl2.ttf",
+];
+const MONO: &[&str] = &[
+    "C:\\Windows\\Fonts\\CascadiaMono.ttf",
+    "C:\\Windows\\Fonts\\consola.ttf",
+];
+
+/// Titles and the few words that name a thing: Segoe UI at Semibold.
+const SEMIBOLD: &str = "semibold";
+/// Segoe Fluent Icons. See [`crate::ui::glyphs`].
+const FLUENT: &str = "fluent-icons";
+
+pub fn semibold_family() -> egui::FontFamily {
+    egui::FontFamily::Name(SEMIBOLD.into())
+}
+
+pub fn fluent_family() -> egui::FontFamily {
+    egui::FontFamily::Name(FLUENT.into())
+}
+
+fn weight(wght: f32) -> egui::FontTweak {
+    egui::FontTweak {
+        coords: egui::epaint::text::VariationCoords::new([(b"wght", wght)]),
+        ..Default::default()
+    }
+}
+
+/// A system font's bytes, read once for the life of the process.
+///
+/// [`install`] runs again on every language change, and every face it installs used to be read off
+/// the disk and copied into a fresh buffer each time. These files never change under a running
+/// program, so each is read once and kept; the weights of the variable face then share one copy.
+fn cached_bytes(path: &'static str) -> Option<&'static [u8]> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static READ: OnceLock<Mutex<HashMap<&'static str, Option<&'static [u8]>>>> = OnceLock::new();
+    let mut read = READ.get_or_init(Default::default).lock().ok()?;
+    *read.entry(path).or_insert_with(|| {
+        std::fs::read(path)
+            .ok()
+            .map(|bytes| &*Box::leak(bytes.into_boxed_slice()))
+    })
+}
+
 /// The family for the interface's own icons. See [`ICONS`].
 pub fn icons_family() -> egui::FontFamily {
     egui::FontFamily::Name(ICONS.into())
@@ -112,10 +166,72 @@ pub struct FontStatus {
 /// whole reason the Devanagari one is conditional.
 pub fn install(ctx: &egui::Context, want_devanagari: bool) -> FontStatus {
     let mut fonts = egui::FontDefinitions::default();
-    if let Ok(bytes) = std::fs::read("C:\\Windows\\Fonts\\segoeui.ttf") {
-        fonts.font_data.insert("studio-segoe".into(), std::sync::Arc::new(egui::FontData::from_owned(bytes)));
-        fonts.families.entry(egui::FontFamily::Proportional).or_default().insert(0,"studio-segoe".into());
+    let bundled_chain = fonts
+        .families
+        .get(&egui::FontFamily::Proportional)
+        .cloned()
+        .unwrap_or_default();
+
+    // The text face: Segoe UI Variable, which is what Windows 11 sets its own interface in, at
+    // Regular for text and Semibold for titles — Fluent uses no other weights. It is one variable
+    // file, so both weights are the same bytes read once and pinned to two points on its `wght` axis.
+    // Windows 10 does not have it; there the static Segoe UI pair stands in, which is what that
+    // system sets its own interface in.
+    let (regular, semibold) = match cached_bytes(TEXT_VARIABLE) {
+        Some(bytes) => (
+            Some(egui::FontData::from_static(bytes).tweak(weight(400.0))),
+            Some(egui::FontData::from_static(bytes).tweak(weight(600.0))),
+        ),
+        None => (
+            cached_bytes(TEXT_REGULAR).map(egui::FontData::from_static),
+            cached_bytes(TEXT_SEMIBOLD).map(egui::FontData::from_static),
+        ),
+    };
+    if let Some(face) = regular {
+        fonts.font_data.insert("studio-text".into(), std::sync::Arc::new(face));
+        fonts
+            .families
+            .entry(egui::FontFamily::Proportional)
+            .or_default()
+            .insert(0, "studio-text".into());
     }
+    let mut strong_chain = bundled_chain.clone();
+    if let Some(face) = semibold {
+        fonts.font_data.insert("studio-text-semibold".into(), std::sync::Arc::new(face));
+        strong_chain.insert(0, "studio-text-semibold".into());
+    } else if fonts.font_data.contains_key("studio-text") {
+        strong_chain.insert(0, "studio-text".into());
+    }
+    fonts
+        .families
+        .insert(egui::FontFamily::Name(SEMIBOLD.into()), strong_chain);
+
+    // The interface's pictograms: Segoe Fluent Icons, or on Windows 10 the MDL2 set it grew out of —
+    // the same codepoints, drawn by the same hand. The bundled chain follows only so that
+    // [`can_draw`] has a replacement box to compare against; see [`crate::ui::glyphs`].
+    let mut fluent_chain = bundled_chain;
+    if let Some((path, bytes)) = FLUENT_ICONS.iter().find_map(|p| cached_bytes(p).map(|b| (p, b))) {
+        let name = format!("fluent-{}", path.rsplit('\\').next().unwrap_or("icons"));
+        fonts.font_data.insert(name.clone(), std::sync::Arc::new(egui::FontData::from_static(bytes)));
+        fluent_chain.insert(0, name);
+    }
+    fonts
+        .families
+        .insert(egui::FontFamily::Name(FLUENT.into()), fluent_chain);
+
+    // Triggers are code-like, and Windows' own code face is Cascadia Mono (Consolas before it).
+    // Both sit beside Segoe UI far better than the bundled Hack, which is drawn to another measure.
+    if let Some((path, bytes)) = MONO.iter().find_map(|p| cached_bytes(p).map(|b| (p, b))) {
+        let face = egui::FontData::from_static(bytes);
+        let face = if path.contains("Cascadia") { face.tweak(weight(400.0)) } else { face };
+        fonts.font_data.insert("studio-mono".into(), std::sync::Arc::new(face));
+        fonts
+            .families
+            .entry(egui::FontFamily::Monospace)
+            .or_default()
+            .insert(0, "studio-mono".into());
+    }
+
     let mut status = FontStatus::default();
 
     // The interface's own icons get their own family, taken now, while `fonts` still holds nothing
@@ -234,7 +350,11 @@ fn add_face(fonts: &mut egui::FontDefinitions, candidates: &[&str], place: Place
     // Leaving it out is what turned every button label into empty boxes the moment the language was
     // Hindi: the buttons pin their text to this family, and Devanagari was only ever added to the
     // other two. A `Place::BeforeEmoji` face still stays out, which is the whole point of the family.
-    let mut families = vec![egui::FontFamily::Proportional, egui::FontFamily::Monospace];
+    let mut families = vec![
+        egui::FontFamily::Proportional,
+        egui::FontFamily::Monospace,
+        egui::FontFamily::Name(SEMIBOLD.into()),
+    ];
     if matches!(place, Place::Last) {
         families.push(egui::FontFamily::Name(ICONS.into()));
     }

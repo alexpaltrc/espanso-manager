@@ -43,7 +43,6 @@
 use crate::app::{AppState, View};
 use crate::i18n::Lang;
 use crate::ui::edit_form::EditState;
-use egui::{Color32, Stroke, Vec2};
 
 pub fn create_expansion(ctx: &egui::Context, state: &mut AppState) {
     let folder = filter(ctx).filter(|f| !f.is_empty());
@@ -110,27 +109,4 @@ pub(super) fn set_filter(ctx: &egui::Context, state: &mut AppState, folder: Opti
     state.search.clear();
     state.view = View::List;
     ctx.request_repaint();
-}
-
-/// The icons this app draws. A short list on purpose: each one is a few line segments written by
-/// hand, and a set that grows past what the screens actually ask for is a set nobody keeps
-/// consistent. Add a variant when a screen needs it, not in anticipation.
-#[derive(Clone, Copy)]
-pub enum Icon {
-    Search,
-}
-
-/// Draws `kind` centred in `rect`, at a fixed 18 points whatever the rect is, so an icon beside
-/// text is the same size on every screen.
-pub fn icon(ui: &egui::Ui, rect: egui::Rect, kind: Icon, ink: Color32) {
-    let r = egui::Rect::from_center_size(rect.center(), Vec2::splat(18.0));
-    let p = |x: f32, y: f32| r.min + egui::vec2(x, y);
-    let s = Stroke::new(1.45, ink);
-    let painter = ui.painter();
-    match kind {
-        Icon::Search => {
-            painter.circle_stroke(p(7., 7.), 5., s);
-            painter.line_segment([p(11., 11.), p(16., 16.)], s);
-        }
-    }
 }

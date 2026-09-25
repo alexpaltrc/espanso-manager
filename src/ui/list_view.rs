@@ -17,20 +17,19 @@
  * along with EspansoManager.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-//! The library: everything you have, in one flat list, with the folders as filters above it.
+//! The library: everything you have, in one flat list, with the chosen one open beside it.
 //!
-//! The screen reads top to bottom in the order the plan sets out — title and the real state of
-//! espanso, then search and the one primary action, then the folder chips, then how many rows the
-//! filter left and the way into picking several, then the list itself, then a quiet way out to help
-//! and settings. Nothing here writes to disk; every action is a call into `AppState`.
+//! The screen reads top to bottom — the real state of espanso on the left of the title, the three
+//! borderless commands on its right; then the search and the folder picker, short and centred;
+//! then the list, trigger and a one-line preview per row. Choosing a row opens the inspector at
+//! the right, or, when the window is too narrow for two columns, in place of the list with a way
+//! back. Nothing here writes to disk; every action is a call into `AppState`.
 //!
 //! ## A folder filters, it does not contain
 //!
-//! Folders are assignments — see [`crate::settings`] — so the list is *one* list and a chip decides
-//! which part of it you are looking at. There are no collapsible folder sections any more, and with
-//! them went the three things that only existed to serve them: the per-folder drop zone, the strip
-//! under the last row that took an expansion back out, and the rule that folded folders shut past a
-//! handful. The chips do that work now, and they do it without laying out a single row.
+//! Folders are assignments — see [`crate::settings`] — so the list is *one* list and the folder
+//! picker decides which part of it you are looking at. There are no folder sections, drop zones or
+//! per-folder headers in the list; the picker's menu does that work without laying out a row.
 //!
 //! ## Four mechanisms account for most of this file
 //!
@@ -38,8 +37,8 @@
 //! exactly its own height, measured once from a real row and cached per density. So anything asked
 //! per row must be cheap *and* must be asked after that check — `Context::is_being_dragged` reads
 //! like a cheap lookup and is an exclusive lock on the whole context, which is why the pass-wide
-//! answers are hoisted into [`RowPass`] before the loop. The one open row is exempt: it is always
-//! drawn in full, and it never writes to the height cache, because its height is not a row's height.
+//! answers are hoisted into [`RowPass`] before the loop. The chosen row, the focused one, a row
+//! being dragged and one just saved are exempt: each of them may have to scroll itself into view.
 //!
 //! **Hover.** Two slots, one frame apart. A row must know whether it is highlighted *before* it
 //! draws, which is before it can learn whether the pointer is over it, so it reads last frame's
@@ -47,11 +46,11 @@
 //! scrolled away, filtered out or deleted.
 //!
 //! **Drag and drop.** A drop is a call to `AppState::assign_folder_to_triggers` and nothing moves in
-//! `base.yml`. The targets are the folder chips themselves. `DRAG_START_DISTANCE` keeps an ordinary
-//! click from becoming a drag, and `drag_autoscroll` must be called from *inside* the `ScrollArea`
-//! closure.
+//! `base.yml`. The targets are a strip of folder names laid over the top of the list only while
+//! something is being dragged. `DRAG_START_DISTANCE` keeps an ordinary click from becoming a drag,
+//! and `drag_autoscroll` must be called from *inside* the `ScrollArea` closure.
 //!
-//! **Choosing several.** An explicit mode, entered from a button and never by accident — except by
+//! **Choosing several.** An explicit mode, entered from the `…` menu and never by accident — except by
 //! Ctrl- or Shift-clicking a row, which is what someone who already knows Windows will try first.
 //! Changing folder or search empties the selection and says so, because a selection that survives a
 //! filter change is a selection nobody can see.
@@ -62,6 +61,8 @@ use crate::app::{
 use crate::i18n::{fill, Strings};
 use crate::ui::controls::{self, Tone};
 use crate::ui::edit_form::EditState;
+use crate::ui::glyphs::{self, Glyph};
+use crate::ui::keys;
 use crate::ui::studio;
 
 /// Where the pointer currently is, remembered between frames so a row can tint itself without
@@ -442,153 +443,60 @@ fn drag_autoscroll(ui: &egui::Ui) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// View switch
-// ---------------------------------------------------------------------------------------------
-
-/// Two-position segmented control for list density, drawn as a pair of icons rather than words.
-///
-/// The icons are painted directly instead of using font glyphs: they always render, in every
-/// language and on every machine, and they carry their meaning at a glance the way a text label
-/// can't. The selected side is filled with the accent colour and the other is left muted, so the
-/// pair reads as a light switch — one on, one off.
-///
-/// Returns `Some(compact)` on the frame the user picks the *other* side.
-fn view_switch(ui: &mut egui::Ui, compact: bool, t: &'static crate::i18n::Strings) -> Option<bool> {
-    let mut result = None;
-    let is_light = !ui.visuals().dark_mode;
-
-    // The two halves share one outlined container, the way a segmented control does everywhere
-    // else in Windows. Drawn as two loose buttons they read as two unrelated toggles; inside one
-    // track it is obvious they are two positions of the same switch.
-    controls::segment_track(is_light).show(ui, |ui| {
-        ui.spacing_mut().item_spacing.x = 2.0;
-        // Right-to-left parent, so push the compact (denser) option first to end up on the right.
-        if segment(ui, compact, true, t.view_compact_tip) {
-            result = Some(true);
-        }
-        if segment(ui, !compact, false, t.view_comfortable_tip) {
-            result = Some(false);
-        }
-    });
-    result
-}
-
-/// One half of the view switch. `dense` picks which pictogram is drawn: four tight lines for the
-/// compact view, two tall stacked cards for the comfortable one.
-fn segment(ui: &mut egui::Ui, selected: bool, dense: bool, tip: &str) -> bool {
-    let size = egui::vec2(30.0, 24.0);
-    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
-    let is_light = !ui.visuals().dark_mode;
-    controls::focus_ring(ui, &response, 3.0);
-
-    if ui.is_rect_visible(rect) {
-        // Shared with every other segmented control in the app, so the density switch and the
-        // theme, language and prefix pickers cannot drift apart over time.
-        controls::segment_background(ui, rect, selected, response.hovered());
-        let painter = ui.painter();
-
-        // Filled and bright when this side is active, thin and muted when it is not — the same
-        // "lit / unlit" cue a physical switch gives.
-        let ink = if selected {
-            ui.visuals().text_color()
-        } else {
-            crate::app::secondary_text(is_light)
-        };
-        let inner = rect.shrink2(egui::vec2(8.0, 6.0));
-        if dense {
-            let rows = 4;
-            let gap = inner.height() / rows as f32;
-            for i in 0..rows {
-                let y = inner.top() + gap * (i as f32 + 0.5);
-                painter.rect_filled(
-                    egui::Rect::from_min_max(
-                        egui::pos2(inner.left(), y - 1.0),
-                        egui::pos2(inner.right(), y + 1.0),
-                    ),
-                    egui::CornerRadius::same(1),
-                    ink,
-                );
-            }
-        } else {
-            let cards = 2;
-            let gap = inner.height() / cards as f32;
-            for i in 0..cards {
-                let top = inner.top() + gap * i as f32 + 1.0;
-                painter.rect_filled(
-                    egui::Rect::from_min_max(
-                        egui::pos2(inner.left(), top),
-                        egui::pos2(inner.right(), top + gap - 3.0),
-                    ),
-                    egui::CornerRadius::same(2),
-                    ink,
-                );
-            }
-        }
-    }
-
-    let response = response.on_hover_text(tip);
-    if response.hovered() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-    }
-    response.clicked() && !selected
-}
-
-// ---------------------------------------------------------------------------------------------
 // The screen
 // ---------------------------------------------------------------------------------------------
 
-/// Height set aside for the strip of quiet links at the foot of the screen, until the first frame
-/// has measured the real one.
-const FOOTER_HEIGHT: f32 = 46.0;
 /// The list never gets less than this, however small the window: below it the list stops being a
-/// list. One full row: at the window's minimum height (see `display::MIN_SIZE`) this fits with up
-/// to three rows of folder chips above it; with more than that the page scrolls (see [`show`]).
+/// list. One full row.
 const LIST_MIN_HEIGHT: f32 = 56.0;
-/// How tall an open row's replacement box may grow before it starts scrolling instead. Rounded down
-/// to whole lines at draw time, so the real cap is this or a little less, never a sliced line.
-const DETAIL_MAX_HEIGHT: f32 = 180.0;
+/// From this width on, the chosen expansion opens in a pane beside the list; below it, the detail
+/// takes the whole window and «Volver» leads back.
+const INSPECTOR_BREAK: f32 = 720.0;
+/// The inspector's share of the window, and the widths it is kept between.
+const INSPECTOR_SHARE: f32 = 0.42;
+const INSPECTOR_MIN: f32 = 300.0;
+const INSPECTOR_MAX: f32 = 420.0;
+/// The widest the search box gets. A search box across the whole window is a search box nobody's
+/// eye goes to.
+const SEARCH_MAX: f32 = 340.0;
+const SEARCH_MIN: f32 = 180.0;
 
-pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
-    begin_hover_frame(ui.ctx());
-    // The screen is sized to the window, list included, so normally this never scrolls. It exists
-    // for what no fixed size can cover — a banner, a picking bar and two rows of chips all at once
-    // on the smallest window can leave less than the list's minimum. Then the page scrolls rather
-    // than pushing the footer out through the bottom edge.
-    let page_height = ui.available_height();
-    controls::page_scroll(ui, "library-page", |ui| page(ui, state, page_height));
-
-    keyboard(ui, state);
-    end_hover_frame(ui.ctx());
+fn search_id() -> egui::Id {
+    egui::Id::new("library-search")
 }
 
-fn page(ui: &mut egui::Ui, state: &mut AppState, page_height: f32) {
-    let is_light = !ui.visuals().dark_mode;
-    let page_top = ui.cursor().top();
+/// Whether the search box had the keyboard at the end of the last frame. egui takes focus away on
+/// Esc before this screen runs, so without it the Esc that should empty the search could not be
+/// told apart from the Esc that should close the inspector.
+fn search_had_focus_key() -> egui::Id {
+    egui::Id::new("library-search-had-focus")
+}
 
-    // A chip for a folder that has since been renamed or deleted would filter the list down to
-    // nothing and give no way back. Falling back to "all" is the only honest answer.
-    let mut active = studio::filter(ui.ctx());
+/// Set when the choice moved by keyboard, so the row that is now chosen scrolls itself into view
+/// once, the way the row saved a moment ago does.
+fn scroll_to_open_key() -> egui::Id {
+    egui::Id::new("library-scroll-to-open")
+}
+
+pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
+    let ctx = ui.ctx().clone();
+    begin_hover_frame(&ctx);
+    // Read before anything on this screen draws a popup: a popup closes itself on the Esc of this
+    // frame, and that Esc is then spent — it must not also close the inspector behind it.
+    let popup_was_open = egui::Popup::is_any_open(&ctx);
+    let is_light = !ui.visuals().dark_mode;
+
+    // A folder that has since been renamed or deleted would filter the list down to nothing and
+    // give no way back. Falling back to "all" is the only honest answer.
+    let mut active = studio::filter(&ctx);
     if let Some(folder) = active.clone().filter(|f| !f.is_empty()) {
         if !state.list().folder_names.contains(&folder) {
-            studio::set_filter(ui.ctx(), state, None);
+            studio::set_filter(&ctx, state, None);
             active = None;
         }
     }
 
-    // 1 — What this is, and whether espanso is actually listening.
-    title_row(ui, state, is_light);
-    ui.add_space(controls::GAP_SECTION);
-
-    // 2 — Finding something, and making something.
-    search_row(ui, state, is_light);
-    ui.add_space(controls::GAP_WIDE);
-
     let list = state.list();
-
-    // 3 — The folders, as filters.
-    folder_chips(ui, state, &list, &active, is_light);
-    ui.add_space(controls::GAP_WIDE);
-
     // Which rows the filter leaves, in the order the file has them. Reusing the cache's own
     // grouping means this costs a clone of a list of indices rather than a scan of the expansions.
     let visible: Vec<usize> = match active.as_deref() {
@@ -602,130 +510,120 @@ fn page(ui: &mut egui::Ui, state: &mut AppState, page_height: f32) {
             .unwrap_or_default(),
     };
 
-    // 4 — How many, and the way into choosing several.
-    count_row(ui, state, visible.len(), active.as_deref(), is_light);
-
-    let picking = select_mode(ui.ctx());
-    if picking {
-        ui.add_space(controls::GAP_ROW);
-        bulk_bar(ui, state, &list, &visible, is_light);
+    // The open row has to be one the list is showing: an inspector about an expansion the search
+    // has just filtered away describes something that is not on the screen.
+    let open = open_row(&ctx).filter(|t| visible.iter().any(|&i| list.rows[i].trigger == *t));
+    if open.is_none() && open_row(&ctx).is_some() {
+        set_open_row(&ctx, None);
     }
-    ui.add_space(controls::GAP_WIDE);
+    let wide = ui.available_width() >= INSPECTOR_BREAK;
 
-    // 5 — The list. Given the line its card must end on rather than a height, because the
-    // headings inside the card are measured, not estimated: an estimate that ran 16 px short
-    // was pushing the footer into the bottom margin at every size, and off the window at the
-    // smallest one.
-    //
-    // The footer is measured too, a frame late: its buttons are as tall as the script in them, and
-    // Devanagari stands taller than Latin, so a fixed allowance that fit Spanish left Hindi a few
-    // pixels over — just enough to put a scroll bar on a page that has nothing to scroll.
-    let footer_id = egui::Id::new("library-footer-height");
-    let footer_height = ui.ctx().data(|d| d.get_temp::<f32>(footer_id)).unwrap_or(FOOTER_HEIGHT);
-    // egui also puts its item spacing after the card, which is part of the gap to the footer.
-    let card_bottom = page_top + page_height
-        - footer_height
-        - controls::GAP_WIDE
-        - ui.spacing().item_spacing.y;
-    show_list(ui, state, &list, &visible, card_bottom, picking, is_light);
+    match (&open, wide) {
+        (Some(trigger), false) => {
+            let trigger = trigger.clone();
+            inspector(ui, state, &trigger, false, is_light);
+        }
+        _ => {
+            header(ui, state, is_light);
+            ui.add_space(controls::GAP_WIDE);
+            search_row(ui, state, &list, active.as_deref(), is_light);
+            ui.add_space(controls::GAP_WIDE);
 
-    // 6 — Quietly, the way to everything else.
-    ui.add_space(controls::GAP_WIDE);
-    let footer_top = ui.cursor().top();
-    footer(ui, state, is_light);
-    let measured = ui.min_rect().bottom() - footer_top;
-    if (measured - footer_height).abs() > 0.5 {
-        ui.ctx().data_mut(|d| d.insert_temp(footer_id, measured));
-        ui.ctx().request_repaint();
-    }
-}
-
-/// Title, the real state of espanso, and the one button that changes it.
-fn title_row(ui: &mut egui::Ui, state: &mut AppState, is_light: bool) {
-    let t = state.t();
-    let paused = state.paused;
-    ui.horizontal(|ui| {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let label = if paused { t.tray_resume } else { t.tray_pause };
-            if controls::button(ui, label, Tone::Normal, true).clicked() {
-                // The tray owns the daemon. The view can only ask. See [`AppState::paused`].
-                state.pause_toggle_requested = true;
-            }
-            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                let heading = studio::text(
-                    state,
-                    "Tus expansiones",
-                    "Your expansions",
-                    "Mga expansion mo",
-                    "आपके विस्तार",
-                );
-                let title = ui
-                    .add(egui::Label::new(controls::h2(heading)).truncate())
-                    .on_hover_text(t.app_title);
-                // A label's text starts at the top of its rect, so the heading's baseline is that
-                // top plus the baseline of the same words laid out on their own.
-                let line =
-                    controls::widget_line(ui, controls::h2(heading), egui::TextStyle::Body);
-                let title_baseline = title.rect.top() + controls::baseline(&line);
-                ui.add_space(controls::GAP_ROW);
-                status_pill(ui, state, paused, is_light, title.rect.height(), title_baseline);
+            let full = ui.available_rect_before_wrap();
+            let (list_rect, side) = match &open {
+                Some(trigger) => {
+                    let w = (full.width() * INSPECTOR_SHARE).clamp(INSPECTOR_MIN, INSPECTOR_MAX);
+                    let left = egui::Rect::from_min_max(
+                        full.min,
+                        egui::pos2(full.right() - w - controls::GAP_SECTION, full.bottom()),
+                    );
+                    let right =
+                        egui::Rect::from_min_max(egui::pos2(full.right() - w, full.top()), full.max);
+                    (left, Some((right, trigger.clone())))
+                }
+                None => (full, None),
+            };
+            ui.scope_builder(egui::UiBuilder::new().max_rect(list_rect), |ui| {
+                library(ui, state, &list, &visible, active.as_deref(), is_light);
             });
-        });
-    });
+            if let Some((rect, trigger)) = side {
+                ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                    inspector(ui, state, &trigger, true, is_light);
+                });
+            }
+            ui.advance_cursor_after_rect(full);
+        }
+    }
+
+    keyboard(ui, state, &list, &visible, active.as_deref(), popup_was_open);
+    end_hover_frame(&ctx);
 }
 
-/// A dot and a word: running, paused, or not answering. The dot carries the state in position and
-/// colour, the word carries it in language — neither alone is enough for everybody.
+// --- The top of the screen --------------------------------------------------------------------
+
+/// The size of the dot beside «Activo».
+const STATUS_DOT: f32 = 8.0;
+
+/// What espanso is doing, as a word and a dot. The word says it for everyone; the dot's colour
+/// says it at a glance, and its shape changes too — full while running, a ring while paused — so
+/// no one needs to tell green from amber to read it.
 ///
-/// "Activo" is only said once espanso has actually replied (see [`AppState::espanso_confirmed`]);
+/// «Activo» is only said once espanso has actually replied (see [`AppState::espanso_confirmed`]);
 /// a daemon that never answered is not described as running because nobody paused it.
-///
-/// The word stands on the heading's baseline, `baseline`, rather than being centred on the
-/// heading's line: centred, its smaller type sat five points above the heading's. See
-/// [`controls::baseline`]. The dot stands on the same baseline and reaches the word's capitals.
-fn status_pill(
-    ui: &mut egui::Ui,
-    state: &AppState,
-    paused: bool,
-    is_light: bool,
-    height: f32,
-    baseline: f32,
-) {
-    const DOT: f32 = 9.0;
-    /// Segoe UI's capitals are seven tenths of its size.
-    const CAP_HEIGHT: f32 = 0.7;
-    let (colour, label) = if !state.espanso_confirmed {
+fn status_parts(state: &AppState, is_light: bool) -> (egui::Color32, &'static str, bool) {
+    if !state.espanso_confirmed {
         (
             crate::app::danger(is_light),
             studio::text(state, "Sin respuesta", "Not responding", "Hindi tumutugon", "जवाब नहीं"),
+            true,
         )
-    } else if paused {
+    } else if state.paused {
         (
             crate::app::caution(is_light),
             studio::text(state, "Pausado", "Paused", "Naka-pause", "रुका हुआ"),
+            false,
         )
     } else {
         (
             crate::app::success(is_light),
             studio::text(state, "Activo", "Active", "Aktibo", "सक्रिय"),
+            true,
         )
-    };
-    let gap = controls::GAP_TIGHT + 2.0;
-    let font = egui::TextStyle::Small.resolve(ui.style());
-    let cap = font.size * CAP_HEIGHT;
-    let word = ui.painter().layout_no_wrap(label.to_owned(), font, colour);
-    let (rect, response) = ui.allocate_exact_size(
-        egui::vec2(DOT + gap + word.size().x, height),
-        egui::Sense::hover(),
+    }
+}
+
+fn status_width(ui: &egui::Ui, state: &AppState, is_light: bool) -> f32 {
+    let (_, word, _) = status_parts(state, is_light);
+    let galley = ui.painter().layout_no_wrap(
+        word.to_owned(),
+        egui::TextStyle::Body.resolve(ui.style()),
+        egui::Color32::PLACEHOLDER,
     );
-    let painter = ui.painter();
-    painter.circle_filled(
-        egui::pos2(rect.left() + DOT * 0.5, baseline - cap * 0.5),
-        4.0,
-        colour,
+    STATUS_DOT + controls::GAP + galley.size().x
+}
+
+fn status(ui: &mut egui::Ui, state: &AppState, is_light: bool) {
+    let (colour, word, filled) = status_parts(state, is_light);
+    let galley = ui.painter().layout_no_wrap(
+        word.to_owned(),
+        egui::TextStyle::Body.resolve(ui.style()),
+        crate::app::secondary_text(is_light),
     );
-    let word_top = baseline - controls::baseline(&word);
-    painter.galley(egui::pos2(rect.left() + DOT + gap, word_top), word, colour);
+    let size = egui::vec2(STATUS_DOT + controls::GAP + galley.size().x, controls::FIELD_HEIGHT);
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
+    let centre = egui::pos2(rect.left() + STATUS_DOT * 0.5, rect.center().y);
+    if filled {
+        ui.painter().circle_filled(centre, STATUS_DOT * 0.5, colour);
+    } else {
+        ui.painter()
+            .circle_stroke(centre, STATUS_DOT * 0.5 - 0.75, egui::Stroke::new(1.5, colour));
+    }
+    let top = rect.center().y - galley.size().y * 0.5;
+    ui.painter().galley(
+        egui::pos2(rect.left() + STATUS_DOT + controls::GAP, top),
+        galley,
+        egui::Color32::PLACEHOLDER,
+    );
     if !state.espanso_confirmed {
         let t = state.t();
         let why = studio::text(
@@ -735,57 +633,353 @@ fn status_pill(
             "Hindi sumagot ang Espanso noong huling tanungin. Susubok muli ang “{pause}” o “{resume}”.",
             "पिछली बार पूछने पर Espanso ने जवाब नहीं दिया। “{pause}” या “{resume}” फिर से कोशिश करता है।",
         );
-        response.on_hover_text(crate::i18n::fill(
-            why,
-            &[("pause", t.tray_pause), ("resume", t.tray_resume)],
-        ));
+        response.on_hover_text(fill(why, &[("pause", t.tray_pause), ("resume", t.tray_resume)]));
     }
 }
 
-/// The search field, and the one filled button on the screen.
-fn search_row(ui: &mut egui::Ui, state: &mut AppState, is_light: bool) {
+/// How wide the three command buttons are together.
+fn commands_width() -> f32 {
+    3.0 * controls::FIELD_HEIGHT + 2.0 * controls::GAP_TIGHT
+}
+
+/// The state of espanso on the left, the title in the middle, the three commands on the right. On a
+/// window too narrow for the three on one line, the title moves to a line of its own below them —
+/// it is never cut short.
+fn header(ui: &mut egui::Ui, state: &mut AppState, is_light: bool) {
+    let title = controls::h1(studio::text(
+        state,
+        "Expansiones",
+        "Expansions",
+        "Mga expansion",
+        "विस्तार",
+    ));
+    let title_line = controls::widget_line(ui, title.clone(), egui::TextStyle::Body);
+    let width = ui.available_width();
+    let side = status_width(ui, state, is_light).max(commands_width()) + controls::GAP_WIDE;
+    let one_line = title_line.size().x + 2.0 * side <= width;
+
+    let row_height = title_line.size().y.max(controls::FIELD_HEIGHT);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, row_height), egui::Sense::hover());
+    let mut left = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(rect)
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    status(&mut left, state, is_light);
+    let commands_rect = egui::Rect::from_min_max(
+        egui::pos2(rect.right() - commands_width(), rect.top()),
+        rect.max,
+    );
+    let mut right = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(commands_rect)
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    right.spacing_mut().item_spacing.x = controls::GAP_TIGHT;
+    commands(&mut right, state);
+
+    if one_line {
+        let at = rect.center() - title_line.size() * 0.5;
+        ui.painter().galley(at, title_line, egui::Color32::PLACEHOLDER);
+    } else {
+        ui.add_space(controls::GAP_TIGHT);
+        ui.vertical_centered(|ui| {
+            ui.add(egui::Label::new(title).wrap());
+        });
+    }
+}
+
+/// Pause or resume, a new expansion, and the rest behind «…».
+fn commands(ui: &mut egui::Ui, state: &mut AppState) {
     let t = state.t();
-    ui.horizontal(|ui| {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if controls::button(
+    let lang = state.settings.lang;
+    let (glyph, tip) = if state.paused {
+        (Glyph::Play, t.tray_resume)
+    } else {
+        (Glyph::Pause, t.tray_pause)
+    };
+    if controls::icon_button(ui, glyph, tip, true).clicked() {
+        // The tray owns the daemon. The view can only ask. See [`AppState::paused`].
+        state.pause_toggle_requested = true;
+    }
+    let new_tip = keys::tip(t.new_expansion, keys::NEW, lang);
+    if controls::icon_button(ui, Glyph::Add, &new_tip, true).clicked() {
+        studio::create_expansion(ui.ctx(), state);
+    }
+    let more = controls::icon_button(
+        ui,
+        Glyph::More,
+        studio::text(state, "Más opciones", "More options", "Iba pang opsyon", "और विकल्प"),
+        true,
+    );
+    let picking = select_mode(ui.ctx());
+    let compact = state.settings.compact_view;
+    let mut toggle_picking = false;
+    let mut toggle_compact = false;
+    let mut go: Option<View> = None;
+    menu(&more, MENU_WIDTH, |ui| {
+        let label = if picking {
+            studio::text(state, "Terminar selección", "Stop selecting", "Tapusin ang pagpili", "चयन समाप्त करें")
+        } else {
+            studio::text(state, "Seleccionar varias", "Select several", "Pumili ng ilan", "कई चुनें")
+        };
+        if controls::menu_item(ui, Some(Glyph::MultiSelect), label, None, Tone::Normal, true).clicked() {
+            toggle_picking = true;
+        }
+        let dense = t.view_compact_tip;
+        if controls::menu_check_item(ui, dense, None, compact).clicked() {
+            toggle_compact = true;
+        }
+        controls::menu_separator(ui);
+        let guide = t.tips_button_tip;
+        if controls::menu_item(ui, Some(Glyph::Help), guide, None, Tone::Normal, true).clicked() {
+            go = Some(View::Tips);
+        }
+        if controls::menu_item(ui, Some(Glyph::Settings), t.settings_button, None, Tone::Normal, true)
+            .clicked()
+        {
+            go = Some(View::Settings);
+        }
+    });
+    if toggle_picking {
+        set_select_mode(ui.ctx(), !picking);
+        if picking {
+            state.clear_selection();
+        }
+        set_open_row(ui.ctx(), None);
+    }
+    if toggle_compact {
+        state.set_compact_view(!compact);
+    }
+    if let Some(view) = go {
+        if matches!(view, View::Settings) {
+            state.refresh_autostart_cache();
+            state.ensure_espanso_version();
+        }
+        state.view = view;
+    }
+}
+
+/// How wide a flyout is, unless its words need more.
+const MENU_WIDTH: f32 = 240.0;
+/// How tall the list of folders in the folder menu grows before it scrolls.
+const MENU_FOLDERS_MAX_HEIGHT: f32 = 320.0;
+
+/// A flyout under `button`, opened and closed by it, laid out the way every flyout here is.
+///
+/// Opened from the keyboard, the first line takes the focus, so the arrows can walk the menu at
+/// once; opened with the mouse, nothing is focused and no ring appears.
+fn menu(button: &egui::Response, width: f32, add: impl FnOnce(&mut egui::Ui)) {
+    let by_keyboard = button.clicked() && button.has_focus();
+    egui::Popup::menu(button)
+        .align(egui::RectAlign::BOTTOM_END)
+        .gap(controls::GAP_TIGHT)
+        .width(width)
+        .show(|ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            let first = ui.next_auto_id();
+            add(ui);
+            if by_keyboard {
+                ui.memory_mut(|m| m.request_focus(first));
+            }
+        });
+}
+
+/// The search box and, beside it, which folder the list is showing. Centred together as one group
+/// while they fit side by side; on a narrow window, one above the other.
+fn search_row(
+    ui: &mut egui::Ui,
+    state: &mut AppState,
+    list: &ListCache,
+    active: Option<&str>,
+    is_light: bool,
+) {
+    let t = state.t();
+    let lang = state.settings.lang;
+    let all = studio::text(state, "Todas las carpetas", "All folders", "Lahat ng folder", "सभी फ़ोल्डर");
+    let folder_label: String = match active {
+        None => all.to_owned(),
+        Some("") => t.no_folder.to_owned(),
+        Some(folder) => truncate(folder, 28),
+    };
+    let picker_w = controls::subtle_button_width(ui, true, &folder_label, true);
+    let width = ui.available_width();
+    let side_by_side = SEARCH_MIN + controls::GAP + picker_w <= width;
+    let search_w = if side_by_side {
+        (width - controls::GAP - picker_w).min(SEARCH_MAX)
+    } else {
+        width.min(SEARCH_MAX)
+    };
+
+    let hint = studio::text(state, "Buscar", "Search", "Maghanap", "खोजें");
+    let find_tip = keys::tip(t.search_label, keys::FIND, lang);
+    let mut picker = None;
+    let mut field_changed = false;
+    let mut field_focused = false;
+    let mut search = |ui: &mut egui::Ui, state: &mut AppState| {
+        let field = controls::search_field(ui, search_id(), &mut state.search, hint, search_w)
+            .on_hover_text(&find_tip);
+        field_changed = field.changed();
+        field_focused = field.has_focus();
+    };
+    if side_by_side {
+        let group = search_w + controls::GAP + picker_w;
+        ui.horizontal(|ui| {
+            ui.add_space(((width - group) * 0.5).max(0.0));
+            ui.spacing_mut().item_spacing.x = controls::GAP;
+            search(ui, state);
+            picker = Some(controls::subtle_button(
                 ui,
-                &format!("+  {}", t.new_expansion),
-                Tone::Primary,
-                true,
+                Some(Glyph::Folder),
+                &folder_label,
+                Some(Glyph::ChevronDown),
+            ));
+        });
+    } else {
+        ui.vertical_centered(|ui| search(ui, state));
+        ui.add_space(controls::GAP_TIGHT);
+        controls::quiet_row(ui, |ui| {
+            picker = Some(controls::subtle_button(
+                ui,
+                Some(Glyph::Folder),
+                &folder_label,
+                Some(Glyph::ChevronDown),
+            ));
+        });
+    }
+    ui.ctx().data_mut(|d| d.insert_temp(search_had_focus_key(), field_focused));
+    // A selection made under one search cannot be seen under the next one. Rather than carry it
+    // invisibly, it goes — and the banner says so, because a selection that vanishes without a
+    // word reads as a bug.
+    if field_changed && !state.selected.is_empty() {
+        forget_selection(ui.ctx(), state);
+    }
+    if let Some(picker) = picker {
+        folder_menu(ui, state, list, active, &picker, all, is_light);
+    }
+}
+
+/// The folders, as a flyout: every one with its count, «Sin carpeta», and at the foot the two
+/// things done *to* folders.
+fn folder_menu(
+    ui: &mut egui::Ui,
+    state: &mut AppState,
+    list: &ListCache,
+    active: Option<&str>,
+    picker: &egui::Response,
+    all: &str,
+    is_light: bool,
+) {
+    let _ = is_light;
+    let t = state.t();
+    let lang = state.settings.lang;
+    let mut pick: Option<Option<String>> = None;
+    let mut create = false;
+    let mut options = false;
+    let counts: Vec<usize> = list
+        .folder_names
+        .iter()
+        .map(|folder| {
+            list.grouped
+                .iter()
+                .find(|(name, _)| name == folder)
+                .map_or(0, |(_, indices)| indices.len())
+        })
+        .collect();
+    let room = ui.ctx().content_rect().bottom() - picker.rect.bottom() - 160.0;
+    let real_folder = active.filter(|f| !f.is_empty());
+    let options_label = studio::text(
+        state,
+        "Opciones de carpeta…",
+        "Folder options…",
+        "Mga opsyon ng folder…",
+        "फ़ोल्डर विकल्प…",
+    );
+    // The menu line draws its own plus; the string carries one for the places that have no icon.
+    let new_folder = format!(
+        "{}…",
+        t.add_new_folder.trim_start_matches(['+', ' ']).trim_end_matches('…')
+    );
+    let rename_keys = keys::text(keys::RENAME, lang);
+
+    let by_keyboard = picker.clicked() && picker.has_focus();
+    egui::Popup::menu(picker)
+        .align(egui::RectAlign::BOTTOM_START)
+        .gap(controls::GAP_TIGHT)
+        .width(MENU_WIDTH)
+        .show(|ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            let first = ui.next_auto_id();
+            let total = list.rows.len().to_string();
+            if controls::menu_check_item(ui, all, Some(&total), active.is_none()).clicked() {
+                pick = Some(None);
+            }
+            if by_keyboard {
+                ui.memory_mut(|m| m.request_focus(first));
+            }
+            egui::ScrollArea::vertical()
+                .id_salt("library-folder-menu")
+                .max_height(room.clamp(controls::FIELD_HEIGHT * 3.0, MENU_FOLDERS_MAX_HEIGHT))
+                .show(ui, |ui| {
+                    for (folder, count) in list.folder_names.iter().zip(&counts) {
+                        let count = count.to_string();
+                        let chosen = active == Some(folder.as_str());
+                        if controls::menu_check_item(ui, &truncate(folder, 32), Some(&count), chosen)
+                            .clicked()
+                        {
+                            pick = Some(Some(folder.clone()));
+                        }
+                    }
+                });
+            let loose = list.ungrouped.len().to_string();
+            if controls::menu_check_item(ui, t.no_folder, Some(&loose), active == Some("")).clicked() {
+                pick = Some(Some(String::new()));
+            }
+            controls::menu_separator(ui);
+            if controls::menu_item(ui, Some(Glyph::Add), &new_folder, None, Tone::Normal, true).clicked() {
+                create = true;
+            }
+            if controls::menu_item(
+                ui,
+                Some(Glyph::Rename),
+                options_label,
+                Some(&rename_keys),
+                Tone::Normal,
+                real_folder.is_some(),
             )
             .clicked()
             {
-                studio::create_expansion(ui.ctx(), state);
+                options = true;
             }
-            ui.add_space(controls::GAP_ROW);
-            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                let (icon_rect, _) =
-                    ui.allocate_exact_size(egui::vec2(18.0, 20.0), egui::Sense::hover());
-                studio::icon(
-                    ui,
-                    icon_rect,
-                    studio::Icon::Search,
-                    crate::app::secondary_text(is_light),
-                );
-                let room = ui.available_width() - controls::GAP_ROW;
-                let field = ui.add(
-                    controls::text_field(&mut state.search)
-                        .id(egui::Id::new("library-search"))
-                        .desired_width(room.max(80.0))
-                        .hint_text(t.search_label),
-                );
-                if ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::F)) {
-                    field.request_focus();
-                }
-                // A selection made under one search cannot be seen under the next one. Rather than
-                // carry it invisibly, it goes — and the banner says so, because a selection that
-                // vanishes without a word reads as a bug.
-                if field.changed() && !state.selected.is_empty() {
-                    forget_selection(ui.ctx(), state);
-                }
-            });
         });
-    });
+
+    if create {
+        ui.ctx().data_mut(|d| d.insert_temp(create_folder_key(), String::new()));
+    }
+    if let (true, Some(folder)) = (options, real_folder) {
+        state.view = View::FolderOptions(folder.to_owned());
+    }
+    if let Some(folder) = pick {
+        pick_folder(ui.ctx(), state, folder.as_deref());
+    }
+}
+
+/// Shows one folder, or all of them — and says so if that threw away a selection.
+fn pick_folder(ctx: &egui::Context, state: &mut AppState, folder: Option<&str>) {
+    let had_selection = !state.selected.is_empty();
+    studio::set_filter(ctx, state, folder);
+    set_select_mode(ctx, false);
+    set_open_row(ctx, None);
+    if had_selection {
+        let message = studio::text(
+            state,
+            "Se quitó la selección al cambiar de carpeta o de búsqueda.",
+            "The selection was cleared when the folder or search changed.",
+            "Inalis ang pinili nang magbago ang folder o paghahanap.",
+            "फ़ोल्डर या खोज बदलने पर चयन हटा दिया गया।",
+        );
+        state.set_info_banner(message);
+    }
 }
 
 /// Empties the selection and says out loud that it happened.
@@ -802,331 +996,78 @@ fn forget_selection(ctx: &egui::Context, state: &mut AppState) {
     state.set_info_banner(message);
 }
 
-/// The folder filters: "Todos", every folder the user has, "Sin carpeta", and a way to make one.
-///
-/// Each chip is also where you drop an expansion to file it. That is the whole of drag and drop
-/// now — there is no folder section to aim at any more, and a chip is a bigger, steadier target
-/// than a heading halfway down a scrolling list ever was.
-fn folder_chips(
-    ui: &mut egui::Ui,
-    state: &mut AppState,
-    list: &ListCache,
-    active: &Option<String>,
-    is_light: bool,
-) {
-    let t = state.t();
-    let mut pick: Option<Option<String>> = None;
-    let mut drop_on: Option<(Option<String>, std::sync::Arc<DragPayload>)> = None;
+// --- Dropping onto a folder ---------------------------------------------------------------------
 
-    let gap = egui::vec2(controls::GAP_TIGHT + 3.0, controls::GAP);
-    let all = studio::text(state, "Todos", "All", "Lahat", "सभी");
-    let counts: Vec<usize> = list
-        .folder_names
-        .iter()
-        .map(|folder| {
-            list.grouped
-                .iter()
-                .find(|(name, _)| name == folder)
-                .map_or(0, |(_, indices)| indices.len())
-        })
-        .collect();
-    let (shown, hidden) = chips_that_fit(ui, state, list, &counts, active, all, gap.x);
-
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = gap;
-
-        if controls::chip(ui, all, Some(list.rows.len()), active.is_none()).clicked() {
-            pick = Some(None);
-        }
-
-        for &i in &shown {
-            let folder = &list.folder_names[i];
-            let chip =
-                controls::chip(ui, folder, Some(counts[i]), active.as_deref() == Some(folder));
-            drop_target(ui, &chip, is_light);
-            if chip.clicked() {
-                pick = Some(Some(folder.clone()));
-            }
-            if let Some(payload) = chip.dnd_release_payload::<DragPayload>() {
-                drop_on = Some((Some(folder.clone()), payload));
-            }
-        }
-
-        if !hidden.is_empty() {
-            let more = controls::chip(ui, &more_label(state, hidden.len()), None, false);
-            let widest = hidden
-                .iter()
-                .map(|&i| controls::chip_width(ui, &list.folder_names[i], Some(counts[i])))
-                .fold(more.rect.width(), f32::max);
-            // Always under the chip, scrolling in whatever the window has left below it: left to
-            // pick a side, egui opened it beside the chip, on top of the chips that follow.
-            let below = ui.ctx().content_rect().bottom() - more.rect.bottom() - controls::GAP_WIDE * 2.0;
-            let popup = egui::Popup::menu(&more)
-                .align(egui::RectAlign::BOTTOM_START)
-                .align_alternatives(&[])
-                .gap(controls::GAP_TIGHT)
-                .width(widest + controls::GAP_WIDE);
-            popup.show(|ui| {
-                ui.spacing_mut().item_spacing.y = 2.0;
-                let tall = below.clamp(controls::FIELD_HEIGHT * 3.0, MORE_MAX_HEIGHT);
-                egui::ScrollArea::vertical().max_height(tall).show(ui, |ui| {
-                    for &i in &hidden {
-                        let folder = &list.folder_names[i];
-                        if controls::menu_row(ui, folder, counts[i], false).clicked() {
-                            pick = Some(Some(folder.clone()));
-                        }
-                    }
-                });
-            });
-        }
-
-        let chip = controls::chip(
-            ui,
-            t.no_folder,
-            Some(list.ungrouped.len()),
-            active.as_deref() == Some(""),
-        );
-        drop_target(ui, &chip, is_light);
-        if chip.clicked() {
-            pick = Some(Some(String::new()));
-        }
-        if let Some(payload) = chip.dnd_release_payload::<DragPayload>() {
-            drop_on = Some((None, payload));
-        }
-
-        if controls::button(ui, t.add_new_folder, Tone::Quiet, true).clicked() {
-            ui.ctx()
-                .data_mut(|d| d.insert_temp(create_folder_key(), String::new()));
-        }
-    });
-
-    if let Some((folder, payload)) = drop_on {
-        state.assign_folder_to_triggers(&payload, folder);
-    }
-    if let Some(folder) = pick {
-        let had_selection = !state.selected.is_empty();
-        studio::set_filter(ui.ctx(), state, folder.as_deref());
-        set_select_mode(ui.ctx(), false);
-        if had_selection {
-            let message = studio::text(
-                state,
-                "Se quitó la selección al cambiar de carpeta o de búsqueda.",
-                "The selection was cleared when the folder or search changed.",
-                "Inalis ang pinili nang magbago ang folder o paghahanap.",
-                "फ़ोल्डर या खोज बदलने पर चयन हटा दिया गया।",
-            );
-            state.set_info_banner(message);
-        }
-    }
-}
-
-/// The most rows the folder chips may take. Two is what the smallest window already spends on a
-/// handful of folders; past that, every extra row came out of the list, until with thirty folders
-/// on a small window the list was scrolled out of sight altogether.
-const CHIP_ROWS: usize = 2;
-
-/// How tall the flyout of folders without a chip may grow before it scrolls.
-const MORE_MAX_HEIGHT: f32 = 320.0;
-
-/// The chip that stands for the folders without one of their own: "12 más".
-fn more_label(state: &AppState, hidden: usize) -> String {
-    let words = studio::text(state, "{n} más", "{n} more", "{n} pa", "{n} और");
-    crate::i18n::fill(words, &[("n", &hidden.to_string())])
-}
-
-/// Which folders get a chip of their own and which wait behind "N más", as indices into
-/// `list.folder_names`, both in the list's own order.
-///
-/// Everything fits → everything shows. Otherwise the chips run in order until "Todos", those
-/// folders, "N más", "Sin carpeta" and "Nueva carpeta" fill [`CHIP_ROWS`] rows. The folder being
-/// looked at always keeps its chip, even when its turn falls after the cut: the chip in accent is
-/// the only thing on screen that says which folder the list is showing.
-fn chips_that_fit(
-    ui: &egui::Ui,
-    state: &AppState,
-    list: &ListCache,
-    counts: &[usize],
-    active: &Option<String>,
-    all: &str,
-    gap: f32,
-) -> (Vec<usize>, Vec<usize>) {
-    let t = state.t();
-    let room = ui.available_width();
-    let head = controls::chip_width(ui, all, Some(list.rows.len()));
-    let tail = [
-        controls::chip_width(ui, t.no_folder, Some(list.ungrouped.len())),
-        controls::button_width(ui, t.add_new_folder),
-    ];
-    let widths: Vec<f32> = list
-        .folder_names
-        .iter()
-        .zip(counts)
-        .map(|(folder, &count)| controls::chip_width(ui, folder, Some(count)))
-        .collect();
-    let every: Vec<usize> = (0..widths.len()).collect();
-
-    let rows = |shown: &[usize], more: Option<f32>| {
-        let run = std::iter::once(head)
-            .chain(shown.iter().map(|&i| widths[i]))
-            .chain(more)
-            .chain(tail);
-        rows_taken(run, room, gap)
-    };
-    if rows(&every, None) <= CHIP_ROWS {
-        return (every, Vec::new());
-    }
-
-    let looked_at = active
-        .as_deref()
-        .and_then(|name| list.folder_names.iter().position(|f| f == name));
-    for take in (0..widths.len()).rev() {
-        let mut shown: Vec<usize> = (0..take).collect();
-        if let Some(i) = looked_at.filter(|&i| i >= take) {
-            shown.push(i);
-        }
-        let hidden: Vec<usize> = every.iter().copied().filter(|i| !shown.contains(i)).collect();
-        let more = controls::chip_width(ui, &more_label(state, hidden.len()), None);
-        if rows(&shown, Some(more)) <= CHIP_ROWS || take == 0 {
-            return (shown, hidden);
-        }
-    }
-    (Vec::new(), every)
-}
-
-/// How many rows `horizontal_wrapped` needs for items of these widths: each goes on the current
-/// row if it fits in what is left of `room`, and starts the next one otherwise.
-fn rows_taken(widths: impl IntoIterator<Item = f32>, room: f32, gap: f32) -> usize {
-    let mut rows = 1;
-    let mut x: Option<f32> = None;
-    for w in widths {
-        x = Some(match x {
-            None => w,
-            Some(x) if x + gap + w <= room => x + gap + w,
-            Some(_) => {
-                rows += 1;
-                w
-            }
-        });
-    }
-    rows
-}
-
-/// Outlines a chip while something is being dragged, and lights it up when the pointer is over it,
-/// so every place a row can go is visible at the moment it matters and invisible the rest of the
-/// time.
-fn drop_target(ui: &egui::Ui, chip: &egui::Response, is_light: bool) {
+/// While a row is being dragged, the folders it can be dropped on, floating over the top of the
+/// list. They exist only for the length of the drag: the rest of the time, the folders are one
+/// quiet menu and take no room at all.
+fn drop_targets(ui: &mut egui::Ui, state: &mut AppState, list: &ListCache, at: egui::Rect) {
     if !egui::DragAndDrop::has_payload_of_type::<DragPayload>(ui.ctx()) {
         return;
     }
-    let over = chip.contains_pointer();
-    let colour = if over {
-        accent(ui.visuals())
-    } else {
-        crate::app::line_strong(is_light)
-    };
-    ui.painter().rect_stroke(
-        chip.rect,
-        controls::RADIUS_CONTROL,
-        egui::Stroke::new(if over { 2.0 } else { 1.0 }, colour),
-        egui::StrokeKind::Inside,
-    );
-}
-
-/// How many rows the filter left, the way into picking several, and the density switch.
-fn count_row(
-    ui: &mut egui::Ui,
-    state: &mut AppState,
-    visible: usize,
-    active: Option<&str>,
-    is_light: bool,
-) {
     let t = state.t();
-    let picking = select_mode(ui.ctx());
-    ui.horizontal(|ui| {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if let Some(compact) = view_switch(ui, state.settings.compact_view, t) {
-                state.set_compact_view(compact);
-            }
-            ui.add_space(controls::GAP);
-            let label = if picking {
-                studio::text(state, "Listo", "Done", "Tapos na", "हो गया")
-            } else {
-                studio::text(state, "Seleccionar", "Select", "Pumili", "चुनें")
-            };
-            if controls::button(ui, label, Tone::Normal, visible > 0 || picking).clicked() {
-                set_select_mode(ui.ctx(), !picking);
-                if picking {
-                    state.clear_selection();
-                }
-                set_open_row(ui.ctx(), None);
-            }
-
-            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                let count = crate::i18n::fill(
-                    studio::plural(
-                        visible,
+    let is_light = !ui.visuals().dark_mode;
+    let mut drop_on: Option<(Option<String>, std::sync::Arc<DragPayload>)> = None;
+    egui::Area::new(egui::Id::new("library-drop-targets"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(at.left_top())
+        .interactable(true)
+        .show(ui.ctx(), |ui| {
+            egui::Frame::popup(ui.style())
+                .fill(crate::app::win_card_for(is_light))
+                .corner_radius(controls::RADIUS_DIALOG)
+                .inner_margin(egui::Margin::same(controls::GAP as i8))
+                .show(ui, |ui| {
+                    ui.set_max_width(at.width() - 2.0 * controls::GAP);
+                    ui.label(controls::small_muted(
                         studio::text(
                             state,
-                            "{n} expansión",
-                            "{n} expansion",
-                            "{n} expansion",
-                            "{n} विस्तार",
+                            "Suelta sobre una carpeta",
+                            "Drop on a folder",
+                            "Ibagsak sa isang folder",
+                            "किसी फ़ोल्डर पर छोड़ें",
                         ),
-                        studio::text(
-                            state,
-                            "{n} expansiones",
-                            "{n} expansions",
-                            "{n} expansion",
-                            "{n} विस्तार",
-                        ),
-                    ),
-                    &[("n", &visible.to_string())],
-                );
-                // Given its room first and painted last, like the footer's caption: beside
-                // «Opciones de carpeta» it stands on that link's baseline. See [`controls::baseline`].
-                let caption = ui.painter().layout_no_wrap(
-                    count,
-                    egui::TextStyle::Small.resolve(ui.style()),
-                    crate::app::secondary_text(is_light),
-                );
-                let (slot, _) = ui.allocate_exact_size(caption.size(), egui::Sense::hover());
-                let mut top = slot.top();
-
-                // Only when a real folder is being looked at: there is nothing to rename, re-prefix,
-                // export or delete about "all" or about "no folder".
-                if let Some(folder) = active.filter(|f| !f.is_empty()) {
-                    ui.add_space(controls::GAP_ROW);
-                    let label = studio::text(
-                        state,
-                        "Opciones de carpeta",
-                        "Folder options",
-                        "Mga opsyon ng folder",
-                        "फ़ोल्डर विकल्प",
-                    );
-                    let options = controls::button(ui, label, Tone::Quiet, true);
-                    if options.clicked() {
-                        state.view = View::FolderOptions(folder.to_owned());
-                    }
-                    top = controls::button_baseline(ui, label, options.rect)
-                        - controls::baseline(&caption);
-                }
-                ui.painter()
-                    .galley(egui::pos2(slot.left(), top), caption, egui::Color32::PLACEHOLDER);
-            });
+                        is_light,
+                    ));
+                    ui.add_space(controls::GAP_TIGHT);
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing = egui::vec2(controls::GAP, controls::GAP);
+                        let names = list
+                            .folder_names
+                            .iter()
+                            .map(|f| (Some(f.clone()), truncate(f, 28)))
+                            .chain(std::iter::once((None, t.no_folder.to_owned())));
+                        for (folder, label) in names {
+                            let chip = controls::chip(ui, &label, None, false);
+                            let over = chip.contains_pointer();
+                            ui.painter().rect_stroke(
+                                chip.rect,
+                                controls::RADIUS_CONTROL,
+                                egui::Stroke::new(
+                                    if over { 2.0 } else { 1.0 },
+                                    if over { accent(ui.visuals()) } else { crate::app::line_strong(is_light) },
+                                ),
+                                egui::StrokeKind::Inside,
+                            );
+                            if let Some(payload) = chip.dnd_release_payload::<DragPayload>() {
+                                drop_on = Some((folder, payload));
+                            }
+                        }
+                    });
+                });
         });
-    });
+    if let Some((folder, payload)) = drop_on {
+        state.assign_folder_to_triggers(&payload, folder);
+    }
 }
+
+// --- Choosing several ---------------------------------------------------------------------------
 
 /// What you can do to several expansions at once. Present and greyed with nothing ticked, rather
 /// than absent: an action that disappears takes the explanation of itself with it.
-fn bulk_bar(
-    ui: &mut egui::Ui,
-    state: &mut AppState,
-    list: &ListCache,
-    visible: &[usize],
-    is_light: bool,
-) {
+fn bulk_bar(ui: &mut egui::Ui, state: &mut AppState, list: &ListCache, visible: &[usize]) {
     let t = state.t();
+    let lang = state.settings.lang;
     let count = state.selected.len();
     let any = count > 0;
     let all_ticked = !visible.is_empty()
@@ -1139,31 +1080,18 @@ fn bulk_bar(
     let mut move_them = false;
     let mut unfile = false;
     let mut delete = false;
+    let mut done = false;
 
     controls::inset_frame(ui).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = egui::vec2(controls::GAP, controls::GAP);
-            ui.label(
-                egui::RichText::new(fill(t.selected_count, &[("n", &count.to_string())])).strong(),
-            );
+            ui.label(controls::h3(fill(t.selected_count, &[("n", &count.to_string())])));
 
             let label = if all_ticked {
-                studio::text(
-                    state,
-                    "Quitar selección",
-                    "Clear selection",
-                    "Alisin ang pinili",
-                    "चयन हटाएँ",
-                )
+                studio::text(state, "Quitar selección", "Clear selection", "Alisin ang pinili", "चयन हटाएँ")
             } else {
-                studio::text(
-                    state,
-                    "Seleccionar todas",
-                    "Select all",
-                    "Piliin lahat",
-                    "सभी चुनें",
-                )
+                studio::text(state, "Seleccionar todas", "Select all", "Piliin lahat", "सभी चुनें")
             };
             if controls::button(ui, label, Tone::Quiet, !visible.is_empty()).clicked() {
                 if all_ticked {
@@ -1172,14 +1100,7 @@ fn bulk_bar(
                     select_all = true;
                 }
             }
-
-            let move_label = studio::text(
-                state,
-                "Mover a carpeta",
-                "Move to folder",
-                "Ilipat sa folder",
-                "फ़ोल्डर में ले जाएँ",
-            );
+            let move_label = studio::text(state, "Mover a carpeta", "Move to folder", "Ilipat sa folder", "फ़ोल्डर में ले जाएँ");
             if controls::button(ui, move_label, Tone::Normal, any).clicked() {
                 move_them = true;
             }
@@ -1188,16 +1109,27 @@ fn bulk_bar(
             {
                 unfile = true;
             }
-            if controls::button(ui, t.delete_selected, Tone::Danger, any).clicked() {
+            let delete_tip = keys::tip(t.delete_selected, keys::DELETE, lang);
+            if controls::button(ui, t.delete_selected, Tone::Danger, any)
+                .on_hover_text(delete_tip)
+                .clicked()
+            {
                 delete = true;
+            }
+            let stop = keys::tip(
+                studio::text(state, "Terminar selección", "Stop selecting", "Tapusin ang pagpili", "चयन समाप्त करें"),
+                keys::BACK,
+                lang,
+            );
+            if controls::icon_button(ui, Glyph::Close, &stop, true).clicked() {
+                done = true;
             }
         });
     });
-    let _ = is_light;
 
     if select_all {
         // "Todas" means every expansion the filter is showing, and nothing else. Anything hidden by
-        // the folder chip or by the search is not on this screen and cannot be acted on from it.
+        // the folder or by the search is not on this screen and cannot be acted on from it.
         for &i in visible {
             state.selected.insert(list.rows[i].trigger.clone());
         }
@@ -1221,88 +1153,137 @@ fn bulk_bar(
     if delete {
         state.request_delete_selected();
     }
+    if done {
+        set_select_mode(ui.ctx(), false);
+        state.clear_selection();
+    }
 }
 
-/// A quiet strip at the foot: help, settings, and what this program is.
-fn footer(ui: &mut egui::Ui, state: &mut AppState, is_light: bool) {
-    let t = state.t();
-    let top = ui.cursor().top();
-    ui.painter().hline(
-        ui.max_rect().x_range(),
-        top,
-        egui::Stroke::new(1.0, hairline(is_light)),
-    );
-    ui.add_space(controls::GAP_ROW);
-    ui.horizontal(|ui| {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            // Given its room first, so the links can never crowd it out, but painted last: it
-            // stands on the links' baseline, which is only known once they are placed. Centred on
-            // the row instead, this smaller type sat a point above them. See [`controls::baseline`].
-            let caption = ui.painter().layout_no_wrap(
-                if crate::EXPERIMENTAL {
-                    studio::text(
-                        state,
-                        "Vista de prueba · datos independientes",
-                        "Preview · separate data",
-                        "Preview · hiwalay na data",
-                        "पूर्वावलोकन · अलग डेटा",
-                    )
-                } else {
-                    concat!("Espanso Manager · ", env!("CARGO_PKG_VERSION"))
-                }
-                .to_owned(),
-                egui::TextStyle::Small.resolve(ui.style()),
-                crate::app::secondary_text(is_light),
-            );
-            let (slot, _) = ui.allocate_exact_size(caption.size(), egui::Sense::hover());
-            let links_baseline = controls::quiet_row(ui, |ui| {
-                let help = studio::text(
-                    state,
-                    "Guía rápida",
-                    "Quick guide",
-                    "Mabilis na gabay",
-                    "त्वरित गाइड",
-                );
-                let guide =
-                    controls::button(ui, help, Tone::Quiet, true).on_hover_text(t.tips_button_tip);
-                if guide.clicked() {
-                    state.view = View::Tips;
-                }
-                if controls::button(ui, t.settings_button, Tone::Quiet, true).clicked() {
-                    state.view = View::Settings;
-                    state.refresh_autostart_cache();
-                    state.ensure_espanso_version();
-                }
-                controls::button_baseline(ui, help, guide.rect)
-            });
-            let top = links_baseline - controls::baseline(&caption);
-            ui.painter()
-                .galley(egui::pos2(slot.left(), top), caption, egui::Color32::PLACEHOLDER);
-        });
-    });
-}
+// --- The keyboard -------------------------------------------------------------------------------
 
-/// Ctrl+N, and Escape as a way back out of whatever the list is currently doing.
-fn keyboard(ui: &mut egui::Ui, state: &mut AppState) {
+/// Every key the library answers to, read once at the end of the frame. The table of which keys
+/// those are lives in [`keys`]; this decides only what each means here.
+fn keyboard(
+    ui: &mut egui::Ui,
+    state: &mut AppState,
+    list: &ListCache,
+    visible: &[usize],
+    active: Option<&str>,
+    popup_was_open: bool,
+) {
+    let ctx = ui.ctx().clone();
     if state.pending_confirm.is_some() || state.pending_transfer.is_some() {
         return;
     }
-    if ui.ctx().data(|d| d.get_temp::<Vec<String>>(move_targets_key()).is_some())
-        || ui.ctx().data(|d| d.get_temp::<String>(create_folder_key()).is_some())
+    if ctx.data(|d| d.get_temp::<Vec<String>>(move_targets_key()).is_some())
+        || ctx.data(|d| d.get_temp::<String>(create_folder_key()).is_some())
     {
         return;
     }
-    if ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::N)) {
-        studio::create_expansion(ui.ctx(), state);
+    // A menu that is open has the keyboard: its lines take the arrows and Enter, and Esc closes it.
+    if popup_was_open || egui::Popup::is_any_open(&ctx) {
         return;
     }
-    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-        if open_row(ui.ctx()).is_some() {
-            set_open_row(ui.ctx(), None);
-        } else if select_mode(ui.ctx()) {
-            set_select_mode(ui.ctx(), false);
+
+    if keys::pressed(&ctx, keys::NEW) {
+        studio::create_expansion(&ctx, state);
+        return;
+    }
+    if keys::pressed(&ctx, keys::FIND) || keys::pressed(&ctx, keys::FIND_ALT) {
+        focus_search(&ctx, state);
+        return;
+    }
+
+    let open = open_row(&ctx);
+    let picking = select_mode(&ctx);
+
+    // Esc steps back one layer at a time: out of the search, then the detail, then the picking.
+    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        let in_search = ctx.data(|d| d.get_temp::<bool>(search_had_focus_key())).unwrap_or(false);
+        if in_search {
+            if !state.search.is_empty() {
+                state.search.clear();
+                ctx.memory_mut(|m| m.request_focus(search_id()));
+            }
+        } else if open.is_some() {
+            set_open_row(&ctx, None);
+        } else if picking {
+            set_select_mode(&ctx, false);
             state.clear_selection();
         }
+        return;
+    }
+
+    if keys::typing(&ctx) {
+        return;
+    }
+    // A button or a menu line that has the keyboard owns Enter and the arrows; only a row, or
+    // nothing, lets the list have them.
+    let focused = ctx.memory(|m| m.focused());
+    let on_row = focused.is_none_or(|id| visible.iter().any(|&i| row_id(&list.rows[i].trigger) == id));
+    if !on_row {
+        return;
+    }
+
+    let order: Vec<&str> = visible.iter().map(|&i| list.rows[i].trigger.as_str()).collect();
+    let here = open.as_deref().and_then(|t| order.iter().position(|o| *o == t));
+    let step = if keys::pressed(&ctx, keys::DOWN) {
+        Some(1isize)
+    } else if keys::pressed(&ctx, keys::UP) {
+        Some(-1)
+    } else {
+        None
+    };
+    if let Some(step) = step {
+        if picking || order.is_empty() {
+            return;
+        }
+        let next = match here {
+            Some(i) => (i as isize + step).clamp(0, order.len() as isize - 1) as usize,
+            None if step > 0 => 0,
+            None => order.len() - 1,
+        };
+        set_open_row(&ctx, Some(order[next]));
+        ctx.data_mut(|d| d.insert_temp(scroll_to_open_key(), true));
+        if focused.is_some() {
+            ctx.memory_mut(|m| m.request_focus(row_id(order[next])));
+        }
+        return;
+    }
+
+    if keys::pressed(&ctx, keys::DELETE) {
+        if picking && !state.selected.is_empty() {
+            state.request_delete_selected();
+        } else if let Some(index) = open.as_deref().and_then(|t| entry_index(state, t)) {
+            state.request_delete(index);
+        }
+        return;
+    }
+    if keys::pressed(&ctx, keys::RENAME) {
+        if let Some(folder) = active.filter(|f| !f.is_empty()) {
+            state.view = View::FolderOptions(folder.to_owned());
+        }
+        return;
+    }
+    // Enter on a focused row arrives as that row's click, and the row opens the editor itself.
+    if focused.is_none() && keys::pressed(&ctx, keys::OPEN) {
+        if let Some(trigger) = open {
+            open_edit_for(state, &trigger);
+        }
+    }
+}
+
+/// The search box takes the keyboard, with what is already in it selected, so typing replaces it.
+fn focus_search(ctx: &egui::Context, state: &AppState) {
+    let id = search_id();
+    ctx.memory_mut(|m| m.request_focus(id));
+    if let Some(mut edit) = egui::TextEdit::load_state(ctx, id) {
+        let end = state.search.chars().count();
+        edit.cursor.set_char_range(Some(egui::text::CCursorRange::two(
+            egui::text::CCursor::new(0),
+            egui::text::CCursor::new(end),
+        )));
+        edit.store(ctx, id);
     }
 }
 
@@ -1310,11 +1291,24 @@ fn keyboard(ui: &mut egui::Ui, state: &mut AppState) {
 // The list itself
 // ---------------------------------------------------------------------------------------------
 
-fn list_card(is_light: bool) -> egui::Frame {
-    egui::Frame::default()
-        .fill(crate::app::win_card_for(is_light))
-        .stroke(egui::Stroke::new(1.0, hairline(is_light)))
-        .corner_radius(controls::RADIUS_LIST)
+/// Everything under the search: the picking bar when there is one, then the rows, down to the
+/// bottom of the window.
+fn library(
+    ui: &mut egui::Ui,
+    state: &mut AppState,
+    list: &ListCache,
+    visible: &[usize],
+    active: Option<&str>,
+    is_light: bool,
+) {
+    let picking = select_mode(ui.ctx());
+    if picking {
+        bulk_bar(ui, state, list, visible);
+        ui.add_space(controls::GAP);
+    }
+    let list_top = ui.available_rect_before_wrap();
+    drop_targets(ui, state, list, list_top);
+    show_list(ui, state, list, visible, active, picking, is_light);
 }
 
 fn show_list(
@@ -1322,7 +1316,7 @@ fn show_list(
     state: &mut AppState,
     list: &ListCache,
     visible: &[usize],
-    card_bottom: f32,
+    active: Option<&str>,
     picking: bool,
     is_light: bool,
 ) {
@@ -1330,162 +1324,97 @@ fn show_list(
     let trigger_w = trigger_column(ui.available_width());
     let pass = row_pass(ui, state.settings.compact_view, picking, trigger_w);
     let open = open_row(ui.ctx());
-    let active = studio::filter(ui.ctx());
+    let height = ui.available_height().max(LIST_MIN_HEIGHT);
+    // The one row Tab stops on: the chosen one, or the first. The arrows do the rest, as in every
+    // Windows list — Tab does not walk through a few hundred rows to reach the pane beside them.
+    let tab_stop = open
+        .clone()
+        .or_else(|| visible.first().map(|&i| list.rows[i].trigger.clone()));
 
-    list_card(is_light).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        column_headings(ui, state, trigger_w, picking, is_light);
-        // Less the card's own 1 px outline, which sits outside its contents.
-        let height = (card_bottom - ui.cursor().top() - 1.0).max(LIST_MIN_HEIGHT);
+    egui::ScrollArea::vertical()
+        .id_salt(("library", active))
+        .max_height(height)
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            drag_autoscroll(ui);
 
-        egui::ScrollArea::vertical()
-            .id_salt(("library", &active))
-            .max_height(height)
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                drag_autoscroll(ui);
+            if list.total_entries == 0 {
+                empty_state(ui, t.empty_title, t.empty_hint, is_light);
+                return;
+            }
+            if visible.is_empty() {
+                // Three different nothings, and telling them apart matters: a brand new folder
+                // that reported "nothing matches your search" when nothing had been searched for
+                // was the first thing this screen got wrong out loud.
+                let (title, hint) = if !state.search.trim().is_empty() {
+                    (t.no_matches, "")
+                } else if matches!(active, Some("")) {
+                    (
+                        studio::text(
+                            state,
+                            "Todas tus expansiones están en alguna carpeta.",
+                            "Every expansion is filed in a folder.",
+                            "Nasa folder na ang lahat ng expansion mo.",
+                            "आपके सभी विस्तार किसी फ़ोल्डर में हैं।",
+                        ),
+                        "",
+                    )
+                } else if active.is_some() {
+                    (
+                        studio::text(
+                            state,
+                            "Esta carpeta está vacía.",
+                            "This folder is empty.",
+                            "Walang laman ang folder na ito.",
+                            "यह फ़ोल्डर खाली है।",
+                        ),
+                        studio::text(
+                            state,
+                            "Abre una expansión y usa «Mover a carpeta», o arrástrala hasta aquí.",
+                            "Open an expansion and use \"Move to folder\", or drag it here.",
+                            "Buksan ang isang expansion at gamitin ang \"Ilipat sa folder\", o i-drag ito rito.",
+                            "कोई विस्तार खोलकर «फ़ोल्डर में ले जाएँ» चुनें, या उसे यहाँ खींचें।",
+                        ),
+                    )
+                } else {
+                    (t.no_matches, "")
+                };
+                empty_state(ui, title, hint, is_light);
+                return;
+            }
 
-                if list.total_entries == 0 {
-                    empty_state(ui, t.empty_title, t.empty_hint, is_light);
-                    return;
-                }
-                if visible.is_empty() {
-                    // Three different nothings, and telling them apart matters: a brand new folder
-                    // that reported "nothing matches your search" when nothing had been searched
-                    // for was the first thing this screen got wrong out loud.
-                    let (title, hint) = if !state.search.trim().is_empty() {
-                        (t.no_matches, "")
-                    } else if matches!(active.as_deref(), Some("")) {
-                        (
-                            studio::text(
-                                state,
-                                "Todas tus expansiones están en alguna carpeta.",
-                                "Every expansion is filed in a folder.",
-                                "Nasa folder na ang lahat ng expansion mo.",
-                                "आपके सभी विस्तार किसी फ़ोल्डर में हैं।",
-                            ),
-                            "",
-                        )
-                    } else if active.is_some() {
-                        (
-                            studio::text(
-                                state,
-                                "Esta carpeta está vacía.",
-                                "This folder is empty.",
-                                "Walang laman ang folder na ito.",
-                                "यह फ़ोल्डर खाली है।",
-                            ),
-                            studio::text(
-                                state,
-                                "Arrastra expansiones hasta su pestaña, o ábrelas y usa «Mover a carpeta».",
-                                "Drag expansions onto its tab, or open one and use \"Move to folder\".",
-                                "I-drag ang mga expansion sa tab nito, o buksan ang isa at gamitin ang \"Ilipat sa folder\".",
-                                "विस्तार को इसके टैब पर खींचें, या कोई खोलकर «फ़ोल्डर में ले जाएँ» चुनें।",
-                            ),
-                        )
-                    } else {
-                        (t.no_matches, "")
-                    };
-                    empty_state(ui, title, hint, is_light);
-                    return;
-                }
-
-                egui::Frame::default()
-                    .inner_margin(egui::Margin::symmetric(4, 4))
-                    .show(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        ui.spacing_mut().item_spacing.y = 0.0;
-                        let mut previous_lit = true; // No rule above the first row.
-                        for &index in visible {
-                            let row = &list.rows[index];
-                            let is_open = open.as_deref() == Some(row.trigger.as_str());
-                            previous_lit = show_row(
-                                ui,
-                                state,
-                                list,
-                                row,
-                                visible,
-                                pass,
-                                is_open,
-                                previous_lit,
-                            );
-                        }
-                    });
-            });
-    });
+            ui.set_width(ui.available_width());
+            ui.spacing_mut().item_spacing.y = 0.0;
+            let mut previous_lit = true; // No rule above the first row.
+            for &index in visible {
+                let row = &list.rows[index];
+                let is_open = open.as_deref() == Some(row.trigger.as_str());
+                let focusable = tab_stop.as_deref() == Some(row.trigger.as_str());
+                previous_lit = show_row(
+                    ui,
+                    state,
+                    list,
+                    row,
+                    visible,
+                    pass,
+                    is_open,
+                    focusable,
+                    previous_lit,
+                );
+            }
+        });
 }
 
 fn empty_state(ui: &mut egui::Ui, title: &str, hint: &str, is_light: bool) {
-    ui.add_space(32.0);
+    ui.add_space(48.0);
     ui.vertical_centered(|ui| {
-        ui.label(controls::muted(title, is_light));
+        ui.add(egui::Label::new(controls::muted(title, is_light)).wrap());
         if !hint.is_empty() {
             ui.add_space(controls::GAP);
-            ui.label(controls::small_muted(hint, is_light));
+            ui.add(egui::Label::new(controls::small_muted(hint, is_light)).wrap());
         }
     });
-    ui.add_space(32.0);
-}
-
-/// "Cuando escribes → Aparece este texto", standing over the two columns it names.
-fn column_headings(
-    ui: &mut egui::Ui,
-    state: &AppState,
-    trigger_w: f32,
-    picking: bool,
-    is_light: bool,
-) {
-    let head = egui::Frame::default()
-        .inner_margin(egui::Margin {
-            left: 18,
-            right: 18,
-            top: 11,
-            bottom: 11,
-        })
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = controls::GAP_WIDE;
-                if picking {
-                    ui.add_space(controls::CHECKBOX + controls::GAP_ROW - controls::GAP_WIDE);
-                }
-                // Padded out to the column width exactly the way a row pads its trigger, rather
-                // than allocated a box of that width: `allocate_ui_with_layout` gives the content
-                // the space it asks for but then claims only the space the content used, so the
-                // heading would sit over the first column while the rows below it lined up with
-                // something 90 points to the right.
-                let placed = ui.label(controls::small_muted(
-                    studio::text(
-                        state,
-                        "Cuando escribes",
-                        "When you type",
-                        "Kapag tina-type mo",
-                        "जब आप लिखते हैं",
-                    ),
-                    is_light,
-                ));
-                let padding = trigger_w - placed.rect.width() - ui.spacing().item_spacing.x;
-                if padding > 0.0 {
-                    ui.add_space(padding);
-                }
-                ui.label(controls::small_muted(
-                    studio::text(
-                        state,
-                        "Aparece este texto",
-                        "This text appears",
-                        "Lalabas ang tekstong ito",
-                        "यह टेक्स्ट दिखता है",
-                    ),
-                    is_light,
-                ));
-            });
-        });
-    let rect = head.response.rect;
-    ui.painter().hline(
-        rect.x_range(),
-        rect.bottom(),
-        egui::Stroke::new(1.0, hairline(is_light)),
-    );
+    ui.add_space(48.0);
 }
 
 fn open_edit_for(state: &mut AppState, trigger: &str) {
@@ -1524,6 +1453,7 @@ fn show_row(
     visible: &[usize],
     pass: RowPass,
     is_open: bool,
+    focusable: bool,
     previous_lit: bool,
 ) -> bool {
     let id = row_id(&row.trigger);
@@ -1540,13 +1470,10 @@ fn show_row(
     // drawn normally, so the list can never be wrong — only, for one frame, slower.
     //
     // The band kept either side of the viewport means a row is already laid out by the time it
-    // scrolls into view. A row being dragged is always drawn wherever it is, and so is the one open
-    // row: its height is not a row's height, and standing in for it with a row-sized gap would make
-    // the scrollbar lie by however tall its detail is.
-    //
-    // The row that was just saved is drawn too, wherever in the list it has landed. It is about to
-    // ask to be scrolled into view, and a gap standing in for it cannot ask for anything.
-    if !dragging && !is_open && !flashed {
+    // scrolls into view. A row being dragged is always drawn wherever it is, and so are the chosen
+    // row — the arrows may have just moved the choice off screen, and it has to scroll itself back
+    // — the one Tab stops on, and the one saved a moment ago, which asks to be scrolled into view.
+    if !dragging && !is_open && !flashed && !focusable {
         if let Some(height) = pass.known_height {
             let top = ui.cursor().top();
             let view = ui.clip_rect();
@@ -1559,13 +1486,12 @@ fn show_row(
     }
 
     let before = ui.cursor().top();
-    let lit = show_row_inner(ui, state, list, row, visible, pass, is_open, previous_lit);
-    if !dragging && !is_open {
+    let lit = show_row_inner(ui, state, list, row, visible, pass, is_open, focusable, previous_lit);
+    if !dragging {
         let height = ui.cursor().top() - before;
         // `known_height` is this frame's snapshot, so on the one frame where the height actually
         // changes — a switch between the two densities, or entering the picking mode — every drawn
-        // row writes it once instead of just the first. Fifteen writes, once, against the few
-        // thousand reads a frame this replaced.
+        // row writes it once instead of just the first.
         if height > 1.0 && pass.known_height != Some(height) {
             ui.ctx().data_mut(|d| {
                 d.insert_temp(row_height_key(pass.compact, pass.select_mode), height)
@@ -1573,28 +1499,6 @@ fn show_row(
         }
     }
     lit
-}
-
-/// A chevron, painted rather than set. A glyph from a font lands at whatever size and baseline that
-/// font decided; this one has to sit in an 18-point box next to text, on four alphabets.
-fn chevron(ui: &egui::Ui, rect: egui::Rect, open: bool, ink: egui::Color32) {
-    let c = rect.center();
-    let (w, h) = (4.5, 2.7);
-    let points = if open {
-        vec![
-            egui::pos2(c.x - w, c.y + h),
-            egui::pos2(c.x, c.y - h),
-            egui::pos2(c.x + w, c.y + h),
-        ]
-    } else {
-        vec![
-            egui::pos2(c.x - w, c.y - h),
-            egui::pos2(c.x, c.y + h),
-            egui::pos2(c.x + w, c.y - h),
-        ]
-    };
-    ui.painter()
-        .add(egui::Shape::line(points, egui::Stroke::new(1.5, ink)));
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1606,6 +1510,7 @@ fn show_row_inner(
     visible: &[usize],
     pass: RowPass,
     is_open: bool,
+    focusable: bool,
     previous_lit: bool,
 ) -> bool {
     let t = state.t();
@@ -1642,9 +1547,13 @@ fn show_row_inner(
         }
     };
 
-    let mut bg = if is_selected {
-        crate::app::selection_tint(is_light, accent_color)
-    } else if is_open || hovered_row {
+    let mut bg = if is_open || is_selected {
+        if hovered_row {
+            crate::app::selection_hover_tint(is_light)
+        } else {
+            crate::app::selection_tint(is_light, accent_color)
+        }
+    } else if hovered_row {
         crate::app::hover_tint(is_light)
     } else {
         egui::Color32::TRANSPARENT
@@ -1654,32 +1563,25 @@ fn show_row_inner(
     // translucent wash, so the fade happens behind the words instead of across them.
     if let Some(amount) = flash {
         bg = crate::app::mix(
-            crate::app::win_card_for(is_light),
+            crate::app::tint_base(is_light),
             accent_color,
             if is_light { 0.11 } else { 0.20 } * amount,
         );
     }
 
     let mut edit_clicked = false;
-    let mut delete_clicked = false;
-    let mut move_clicked = false;
-    let mut toggle_open = false;
     let mut clicked_with: Option<(bool, bool)> = None;
 
-    // One frame around the closed row *and* its detail, so the tint covers both. `Frame` reserves
-    // its background shape before the content is laid out and fills it in afterwards, which is what
-    // lets it paint behind something whose height it could not have known in advance.
     let framed = egui::Frame::default()
         .fill(bg)
         .corner_radius(controls::RADIUS_CONTROL)
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
-
             // The horizontal wrapper is what keeps a row as tall as its content: without it the
             // frame is handed the whole remaining height of the list and stretches to fill it.
             let outer = ui.horizontal(|ui| {
-                drag_source(ui, drag_id, t, drag_count, make_payload, |ui| {
-                    closed_row(ui, state, row, pass, is_selected, is_open, is_light);
+                drag_source(ui, drag_id, t, drag_count, focusable, make_payload, |ui| {
+                    closed_row(ui, row, pass, is_selected, is_light);
                     egui::Rect::NOTHING
                 })
             });
@@ -1689,6 +1591,16 @@ fn show_row_inner(
                     ui.ctx()
                         .data_mut(|d| d.insert_temp(hovered_row_pending_key(), drag_id));
                     ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
+                }
+                // The chosen row keeps the arrows for the list: without the lock, egui would move
+                // the keyboard to whatever widget lies above or below it.
+                if resp.has_focus() {
+                    ui.memory_mut(|m| {
+                        m.set_focus_lock_filter(
+                            drag_id,
+                            egui::EventFilter { vertical_arrows: true, ..Default::default() },
+                        )
+                    });
                 }
                 // `clicked()` on its own is not enough. egui stops calling a press a click once the
                 // pointer has drifted more than six points, or once the button has been held past
@@ -1702,35 +1614,33 @@ fn show_row_inner(
                 // again and reports `drag_stopped` exactly like a wobble does. The latch is what
                 // still knows the difference, and without it dropping a whole selection into a
                 // folder would collapse it to the one row that happened to be grabbed.
-                if resp.double_clicked() {
+                let by_enter = resp.clicked()
+                    && resp.has_focus()
+                    && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if resp.double_clicked() || (by_enter && !pass.select_mode) {
                     edit_clicked = true;
-                }
-                if resp.clicked() || (resp.drag_stopped() && !drag_is_deliberate(ui)) {
+                } else if resp.clicked() || (resp.drag_stopped() && !drag_is_deliberate(ui)) {
                     clicked_with = Some(ui.input(|i| (i.modifiers.command, i.modifiers.shift)));
                 }
             }
-
-            if is_open {
-                detail(
-                    ui,
-                    state,
-                    &trigger,
-                    is_light,
-                    &mut edit_clicked,
-                    &mut move_clicked,
-                    &mut delete_clicked,
-                );
-            }
-            let _ = &mut toggle_open;
         });
 
-    // Brought into view once, on the first frame after the save. `None` for the alignment means
-    // "only as far as it takes to see it", so a row that was on screen anyway does not jump, and
-    // the search and folder the user came back to keep the position they had.
-    if flash.is_some() && ui.ctx().data(|d| d.get_temp::<bool>(flash_scroll_key())) == Some(true) {
+    // The accent's one appearance in the list: a short bar beside the chosen row.
+    if is_open {
+        controls::accent_bar(ui, framed.response.rect);
+    }
+
+    // Brought into view once, on the first frame after the save, or after the arrows moved the
+    // choice. `None` for the alignment means "only as far as it takes to see it", so a row that
+    // was on screen anyway does not jump.
+    let scroll_flash =
+        flash.is_some() && ui.ctx().data(|d| d.get_temp::<bool>(flash_scroll_key())) == Some(true);
+    if scroll_flash {
         ui.scroll_to_rect(framed.response.rect, None);
-        ui.ctx()
-            .data_mut(|d| d.insert_temp(flash_scroll_key(), false));
+        ui.ctx().data_mut(|d| d.insert_temp(flash_scroll_key(), false));
+    }
+    if is_open && ui.ctx().data_mut(|d| d.remove_temp::<bool>(scroll_to_open_key())).is_some() {
+        ui.scroll_to_rect(framed.response.rect, None);
     }
 
     if let Some((ctrl, shift)) = clicked_with {
@@ -1744,20 +1654,9 @@ fn show_row_inner(
             // In picking mode a plain click is a tick, which is what Ctrl already means here.
             state.click_select(&trigger, ctrl || picking, shift, &order);
         } else {
-            toggle_open = true;
+            set_open_row(ui.ctx(), if is_open { None } else { Some(&trigger) });
         }
         ui.ctx().request_repaint();
-    }
-    if toggle_open {
-        set_open_row(ui.ctx(), if is_open { None } else { Some(&trigger) });
-    }
-    if move_clicked {
-        ask_to_move(ui.ctx(), vec![trigger.clone()]);
-    }
-    if delete_clicked {
-        if let Some(index) = entry_index(state, &trigger) {
-            state.request_delete(index);
-        }
     }
     if edit_clicked {
         open_edit_for(state, &trigger);
@@ -1766,22 +1665,13 @@ fn show_row_inner(
     lit
 }
 
-/// The row as it looks closed: a tick box when picking, the trigger, the replacement, a chevron.
-fn closed_row(
-    ui: &mut egui::Ui,
-    state: &AppState,
-    row: &ListRow,
-    pass: RowPass,
-    is_selected: bool,
-    is_open: bool,
-    is_light: bool,
-) {
+/// The row: a tick box when picking, the trigger in its column, and what it writes, quietly.
+fn closed_row(ui: &mut egui::Ui, row: &ListRow, pass: RowPass, is_selected: bool, is_light: bool) {
     let pad_y = if pass.compact {
         controls::ROW_PAD_DENSE
     } else {
         controls::ROW_PAD_COMFORTABLE
     };
-    let accent_color = accent(ui.visuals());
 
     egui::Frame::default()
         .inner_margin(egui::Margin {
@@ -1803,179 +1693,273 @@ fn closed_row(
                     controls::paint_checkbox(ui, rect, is_selected);
                 }
 
-                // The chevron is placed first inside a right-to-left layout so it pins to the right
-                // edge; the two text columns then go in a nested left-to-right layout and receive
-                // exactly the width that is left. That is what lets the replacement truncate to the
-                // real available width instead of to a guessed character count.
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let (rect, _) =
-                        ui.allocate_exact_size(egui::Vec2::splat(18.0), egui::Sense::hover());
-                    chevron(
-                        ui,
-                        rect,
-                        is_open,
-                        crate::app::secondary_text(is_light),
-                    );
-
-                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                        let trigger_text = egui::RichText::new(&row.trigger)
-                            .strong()
-                            .monospace()
-                            .color(accent_color);
-                        // A hard column, not a minimum: a trigger wider than the column is cut
-                        // short here and shown whole in the open detail. Letting it push past
-                        // instead would move the start of the replacement from row to row, and a
-                        // ragged second column is exactly what the two headings promise it isn't.
-                        let spacing = ui.spacing().item_spacing.x;
-                        // Laid out and truncated the way a label would be, but painted by hand, a
-                        // hair below centre: centred, the smaller monospace stood a point above the
-                        // replacement. See [`controls::baseline_drop`].
-                        let trigger = egui::WidgetText::from(trigger_text.clone()).into_galley(
-                            ui,
-                            Some(egui::TextWrapMode::Truncate),
-                            (pass.trigger_w - spacing).max(1.0),
-                            egui::TextStyle::Body,
-                        );
-                        let (slot, hover) =
-                            ui.allocate_exact_size(trigger.size(), egui::Sense::hover());
-                        let drop = controls::baseline_drop(
-                            ui,
-                            egui::RichText::new("x"),
-                            egui::RichText::new("x").monospace(),
-                        );
-                        let elided = trigger.elided;
-                        ui.painter().galley(
-                            slot.left_top() + egui::vec2(0.0, drop),
-                            trigger,
-                            egui::Color32::PLACEHOLDER,
-                        );
-                        // What the label did for a trigger too long for its column.
-                        if elided {
-                            hover.on_hover_text(trigger_text);
-                        }
-                        let padding = pass.trigger_w - slot.width() - spacing;
-                        if padding > 0.0 {
-                            ui.add_space(padding);
-                        }
-                        ui.add(
-                            egui::Label::new(controls::muted(&row.preview, is_light))
-                                .truncate()
-                                .selectable(false),
-                        );
-                    });
-                });
+                let trigger_text = egui::RichText::new(&row.trigger)
+                    .monospace()
+                    .color(ui.visuals().strong_text_color());
+                // A hard column, not a minimum: a trigger wider than the column is cut short here
+                // and shown whole in the detail. Letting it push past instead would move the start
+                // of the replacement from row to row.
+                let spacing = ui.spacing().item_spacing.x;
+                // Laid out and truncated the way a label would be, but painted by hand, a hair
+                // below centre: centred, the smaller monospace stood a point above the
+                // replacement. See [`controls::baseline_drop`].
+                let trigger = egui::WidgetText::from(trigger_text.clone()).into_galley(
+                    ui,
+                    Some(egui::TextWrapMode::Truncate),
+                    (pass.trigger_w - spacing).max(1.0),
+                    egui::TextStyle::Body,
+                );
+                let (slot, hover) = ui.allocate_exact_size(trigger.size(), egui::Sense::hover());
+                let drop = controls::baseline_drop(
+                    ui,
+                    egui::RichText::new("x"),
+                    egui::RichText::new("x").monospace(),
+                );
+                let elided = trigger.elided;
+                ui.painter().galley(
+                    slot.left_top() + egui::vec2(0.0, drop),
+                    trigger,
+                    egui::Color32::PLACEHOLDER,
+                );
+                if elided {
+                    hover.on_hover_text(trigger_text);
+                }
+                let padding = pass.trigger_w - slot.width() - spacing;
+                if padding > 0.0 {
+                    ui.add_space(padding);
+                }
+                ui.add(
+                    egui::Label::new(controls::muted(&row.preview, is_light))
+                        .truncate()
+                        .selectable(false),
+                );
             });
         });
-    let _ = state;
 }
 
-/// What an open row shows: the whole replacement, where it is filed, and the three things you can
-/// do to it. The actions live here and only here — a list where every closed row carries Edit and
-/// Delete is a list you cannot read.
-#[allow(clippy::too_many_arguments)]
-fn detail(
-    ui: &mut egui::Ui,
-    state: &AppState,
-    trigger: &str,
-    is_light: bool,
-    edit: &mut bool,
-    move_it: &mut bool,
-    delete: &mut bool,
-) {
+// ---------------------------------------------------------------------------------------------
+// The inspector
+// ---------------------------------------------------------------------------------------------
+
+/// Room kept under the text box for what follows it: the gap, the folder's caption and line, the
+/// gap, the row of actions, and the card's own bottom margin and edge.
+const INSPECTOR_FOOT: f32 = controls::GAP_SECTION
+    + 18.0
+    + controls::GAP_TIGHT
+    + 24.0
+    + controls::GAP_SECTION
+    + controls::FIELD_HEIGHT
+    + controls::GAP_SECTION
+    + 2.0;
+/// What the sunken text box adds around its text: its margin above and below, and its edge.
+const INSET_CHROME: f32 = 2.0 * 10.0 + 2.0;
+
+/// Everything about one expansion: its whole trigger, its whole text, its folder, and what can be
+/// done to it. Beside the list on a wide window (`side`), or as the whole screen on a narrow one,
+/// with «Volver» at the top instead of the close button.
+fn inspector(ui: &mut egui::Ui, state: &mut AppState, trigger: &str, side: bool, is_light: bool) {
     let t = state.t();
-    egui::Frame::default()
-        .inner_margin(egui::Margin {
-            left: controls::ROW_PAD_X as i8,
-            right: controls::ROW_PAD_X as i8,
-            top: 0,
-            bottom: controls::ROW_PAD_X as i8,
-        })
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
+    let lang = state.settings.lang;
+    let mut close = false;
+    let mut edit = false;
+    let mut move_it = false;
+    let mut unfile = false;
+    let mut delete = false;
 
-            // The list's own preview is capped so a multi-kilobyte replacement never costs the list
-            // anything. Here there is exactly one row to look up, so it can show the whole thing.
-            let full = state
-                .match_file
-                .entries
-                .iter()
-                .find(|e| e.trigger_label() == trigger)
-                .map(|e| e.preview(t));
+    // The list's own preview is capped so a multi-kilobyte replacement never costs the list
+    // anything. Here there is exactly one row to look up, so it can show the whole thing.
+    let full = state
+        .match_file
+        .entries
+        .iter()
+        .find(|e| e.trigger_str() == trigger)
+        .map(|e| e.preview(t));
+    let folder = state.settings.folder_of(trigger).map(str::to_owned);
+    let close_tip = keys::tip(
+        studio::text(state, "Cerrar", "Close", "Isara", "बंद करें"),
+        keys::BACK,
+        lang,
+    );
 
-            // The closed row cuts a long trigger to keep the column straight, so this is the one
-            // place the whole thing is readable. It wraps rather than truncates for that reason.
-            ui.label(controls::small_muted(t.when_you_type, is_light));
-            ui.add_space(controls::GAP_TIGHT);
-            controls::inset_frame(ui).show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.add(
-                    egui::Label::new(
-                        egui::RichText::new(trigger)
-                            .strong()
-                            .monospace()
-                            .color(accent(ui.visuals())),
-                    )
-                    .wrap()
-                    .selectable(true),
-                );
+    let mut body = |ui: &mut egui::Ui| {
+        ui.set_width(ui.available_width());
+        if !side {
+            let back = studio::text(state, "Volver", "Back", "Bumalik", "वापस");
+            controls::quiet_row(ui, |ui| {
+                let response = controls::subtle_button(ui, Some(Glyph::Back), back, None)
+                    .on_hover_text(keys::tip(back, keys::BACK, lang));
+                if response.clicked() {
+                    close = true;
+                }
             });
+            ui.add_space(controls::GAP_WIDE);
+        }
 
-            ui.add_space(controls::GAP_ROW);
-            ui.label(controls::small_muted(t.will_be_replaced_by, is_light));
-            ui.add_space(controls::GAP_TIGHT);
-            controls::inset_frame(ui).show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                // Capped at a whole number of lines rather than at a round number of points: a box
-                // whose height falls mid-glyph shows a sliced line at every scroll position except
-                // the last one, which reads as damage rather than as "there is more below".
-                let line = ui.text_style_height(&egui::TextStyle::Body);
-                let cap = (DETAIL_MAX_HEIGHT / line).floor().max(3.0) * line;
-                egui::ScrollArea::vertical()
-                    .id_salt(("row-detail", trigger))
-                    .max_height(cap)
-                    .auto_shrink([false, true])
-                    .show(ui, |ui| match &full {
-                        Some(text) => {
-                            ui.add(egui::Label::new(text).wrap().selectable(true));
-                        }
-                        None => {
-                            ui.label(controls::muted(t.no_matches, is_light));
-                        }
+        // The trigger, whole: the list cuts a long one to keep its column straight, so this is the
+        // one place it can be read in full. It wraps rather than truncates for that reason.
+        ui.horizontal_top(|ui| {
+            if side {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                    if controls::icon_button(ui, Glyph::Close, &close_tip, true).clicked() {
+                        close = true;
+                    }
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+                        trigger_heading(ui, trigger);
                     });
-            });
-
-            ui.add_space(controls::GAP_ROW);
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(controls::GAP, controls::GAP);
-                controls::tag_frame(is_light).show(ui, |ui| {
-                    let folder = state.settings.folder_of(trigger).unwrap_or(t.no_folder);
-                    ui.label(controls::small_muted(folder, is_light));
                 });
-                ui.add_space(controls::GAP);
-                if controls::button(ui, t.edit_button, Tone::Normal, true)
-                    .on_hover_text(t.edit_tip)
-                    .clicked()
-                {
-                    *edit = true;
-                }
-                let move_label = studio::text(
-                    state,
-                    "Mover a carpeta",
-                    "Move to folder",
-                    "Ilipat sa folder",
-                    "फ़ोल्डर में ले जाएँ",
-                );
-                if controls::button(ui, move_label, Tone::Normal, true).clicked() {
-                    *move_it = true;
-                }
-                if controls::button(ui, t.delete, Tone::Danger, true)
-                    .on_hover_text(t.delete_tip)
-                    .clicked()
-                {
-                    *delete = true;
-                }
+            } else {
+                trigger_heading(ui, trigger);
+            }
+        });
+        ui.add_space(controls::GAP_SECTION);
+
+        let text = full.clone().unwrap_or_default();
+        ui.horizontal(|ui| {
+            ui.label(controls::small_muted(
+                studio::text(state, "Texto", "Text", "Teksto", "टेक्स्ट"),
+                is_light,
+            ));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let copy = studio::text(state, "Copiar texto", "Copy text", "Kopyahin ang teksto", "टेक्स्ट कॉपी करें");
+                let copied = studio::text(state, "Copiado", "Copied", "Nakopya", "कॉपी हो गया");
+                controls::copy_button(ui, egui::Id::new("inspector-copy").with(trigger), &text, copy, copied);
             });
         });
+        ui.add_space(controls::GAP_TIGHT);
+        let room = (ui.available_height() - INSPECTOR_FOOT - INSET_CHROME).max(3.0 * controls::FIELD_HEIGHT);
+        controls::inset_frame(ui).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            // Capped at a whole number of lines rather than at a round number of points: a box
+            // whose height falls mid-glyph shows a sliced line at every scroll position except the
+            // last one, which reads as damage rather than as "there is more below".
+            let line = ui.text_style_height(&egui::TextStyle::Body);
+            let cap = (room / line).floor().max(3.0) * line;
+            egui::ScrollArea::vertical()
+                .id_salt(("inspector-text", trigger))
+                .max_height(cap)
+                .auto_shrink([false, true])
+                .show(ui, |ui| match &full {
+                    Some(text) => {
+                        ui.add(egui::Label::new(text).wrap().selectable(true));
+                    }
+                    None => {
+                        ui.label(controls::muted(t.no_matches, is_light));
+                    }
+                });
+        });
+
+        ui.add_space(controls::GAP_SECTION);
+        ui.label(controls::small_muted(
+            studio::text(state, "Carpeta", "Folder", "Folder", "फ़ोल्डर"),
+            is_light,
+        ));
+        ui.add_space(controls::GAP_TIGHT);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = controls::GAP;
+            glyphs::show(ui, Glyph::Folder, glyphs::SIZE, crate::app::secondary_text(is_light));
+            let name = folder.as_deref().unwrap_or(t.no_folder);
+            ui.add(egui::Label::new(truncate(name, 40)).truncate());
+        });
+
+        ui.add_space(controls::GAP_SECTION);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = controls::GAP;
+            if controls::button(ui, t.edit_button, Tone::Primary, true)
+                .on_hover_text(keys::tip(t.edit_button, keys::OPEN, lang))
+                .clicked()
+            {
+                edit = true;
+            }
+            let more = controls::icon_button(
+                ui,
+                Glyph::More,
+                studio::text(state, "Más acciones", "More actions", "Iba pang aksyon", "और क्रियाएँ"),
+                true,
+            );
+            let delete_keys = keys::text(keys::DELETE, lang);
+            let move_label = studio::text(
+                state,
+                "Mover a carpeta…",
+                "Move to folder…",
+                "Ilipat sa folder…",
+                "फ़ोल्डर में ले जाएँ…",
+            );
+            let foldered = folder.is_some();
+            let remove_label = t.remove_from_folder;
+            let delete_label = t.delete;
+            let by_keyboard = more.clicked() && more.has_focus();
+            egui::Popup::menu(&more)
+                .align(egui::RectAlign::BOTTOM_START)
+                .gap(controls::GAP_TIGHT)
+                .width(MENU_WIDTH)
+                .show(|ui| {
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    let first = ui.next_auto_id();
+                    if controls::menu_item(ui, Some(Glyph::MoveToFolder), move_label, None, Tone::Normal, true)
+                        .clicked()
+                    {
+                        move_it = true;
+                    }
+                    if by_keyboard {
+                        ui.memory_mut(|m| m.request_focus(first));
+                    }
+                    if controls::menu_item(ui, None, remove_label, None, Tone::Normal, foldered).clicked() {
+                        unfile = true;
+                    }
+                    controls::menu_separator(ui);
+                    if controls::menu_item(ui, Some(Glyph::Delete), delete_label, Some(&delete_keys), Tone::Danger, true)
+                        .clicked()
+                    {
+                        delete = true;
+                    }
+                });
+        });
+    };
+
+    if side {
+        let height = ui.available_height();
+        controls::section_frame(is_light)
+            .inner_margin(egui::Margin::same(controls::GAP_SECTION as i8))
+            .show(ui, |ui| {
+                ui.set_min_height(height - 2.0 * controls::GAP_SECTION - 2.0);
+                body(ui);
+            });
+    } else {
+        controls::page_scroll(ui, ("inspector-page", trigger), body);
+    }
+
+    if close {
+        set_open_row(ui.ctx(), None);
+    }
+    if edit {
+        open_edit_for(state, trigger);
+    }
+    if move_it {
+        ask_to_move(ui.ctx(), vec![trigger.to_owned()]);
+    }
+    if unfile {
+        state.assign_folder_to_triggers(&[trigger.to_owned()], None);
+    }
+    if delete {
+        if let Some(index) = entry_index(state, trigger) {
+            state.request_delete(index);
+        }
+    }
+}
+
+/// An expansion's trigger as the inspector's heading: monospaced, a step up from the list, and
+/// wrapped whole however long it is.
+fn trigger_heading(ui: &mut egui::Ui, trigger: &str) {
+    ui.add(
+        egui::Label::new(
+            egui::RichText::new(trigger)
+                .monospace()
+                .size(18.0)
+                .color(ui.visuals().strong_text_color()),
+        )
+        .wrap()
+        .selectable(true),
+    );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2039,6 +2023,7 @@ fn drag_source(
     id: egui::Id,
     t: &'static Strings,
     count: usize,
+    focusable: bool,
     payload: impl Fn() -> DragPayload,
     add_contents: impl FnOnce(&mut egui::Ui) -> egui::Rect,
 ) -> Option<egui::Response> {
@@ -2081,7 +2066,13 @@ fn drag_source(
         }
         let interact_rect =
             egui::Rect::from_min_max(row_rect.min, egui::pos2(right_edge, row_rect.max.y));
-        let response = ui.interact(interact_rect, id, egui::Sense::click_and_drag());
+        // Only the one row Tab stops on is focusable; the arrows walk the rest (see `show_list`).
+        let sense = if focusable {
+            egui::Sense::click_and_drag()
+        } else {
+            egui::Sense::CLICK | egui::Sense::DRAG
+        };
+        let response = ui.interact(interact_rect, id, sense);
         // Tab reaches rows too. The ring goes *inside* the row: outside, the list card would clip
         // it on the first and last rows and against the card's sides.
         if response.has_focus() {
@@ -2129,6 +2120,10 @@ pub fn show_move_modal(ctx: &egui::Context, state: &mut AppState) {
     let t = state.t();
     let folders = state.settings.all_folder_names();
     let mut chosen: Option<Option<String>> = None;
+    let new_folder = format!(
+        "{}…",
+        t.add_new_folder.trim_start_matches(['+', ' ']).trim_end_matches('…')
+    );
     let mut close = false;
 
     let modal = controls::dialog(ctx, "library-move").show(ctx, |ui| {
@@ -2141,68 +2136,73 @@ pub fn show_move_modal(ctx: &egui::Context, state: &mut AppState) {
             "Ilipat sa isang folder",
             "किसी फ़ोल्डर में ले जाएँ",
         )));
-        ui.add_space(controls::GAP);
+        // One expansion is the one in the detail beside it; only a selection needs counting.
         let n = targets.len();
-        ui.label(controls::muted(
-            crate::i18n::fill(
-                studio::plural(
-                    n,
-                    studio::text(
-                        state,
-                        "Se moverá {n} expansión.",
-                        "{n} expansion will move.",
-                        "{n} expansion ang ililipat.",
-                        "{n} विस्तार ले जाया जाएगा।",
+        if n > 1 {
+            ui.add_space(controls::GAP);
+            ui.label(controls::muted(
+                crate::i18n::fill(
+                    studio::plural(
+                        n,
+                        studio::text(
+                            state,
+                            "Se moverá {n} expansión.",
+                            "{n} expansion will move.",
+                            "{n} expansion ang ililipat.",
+                            "{n} विस्तार ले जाया जाएगा।",
+                        ),
+                        studio::text(
+                            state,
+                            "Se moverán {n} expansiones.",
+                            "{n} expansions will move.",
+                            "{n} expansion ang ililipat.",
+                            "{n} विस्तार ले जाए जाएँगे।",
+                        ),
                     ),
-                    studio::text(
-                        state,
-                        "Se moverán {n} expansiones.",
-                        "{n} expansions will move.",
-                        "{n} expansion ang ililipat.",
-                        "{n} विस्तार ले जाए जाएँगे।",
-                    ),
+                    &[("n", &n.to_string())],
                 ),
-                &[("n", &n.to_string())],
-            ),
-            is_light,
-        ));
+                is_light,
+            ));
+        }
         ui.add_space(controls::GAP_STACK);
 
+        // The same lines as the folder menu in the header, so a folder is picked the same way
+        // wherever it is picked; the check marks where these already are, when they all agree.
+        let here = {
+            let mut places = targets.iter().map(|tr| state.settings.folder_of(tr));
+            let first = places.next().flatten();
+            places.all(|p| p == first).then_some(first)
+        };
         egui::ScrollArea::vertical()
             .id_salt("library-move-list")
             .max_height(260.0)
             .auto_shrink([false, true])
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                // The same rectangles the library filters with, wrapped: a column of buttons hid
-                // the sixth folder behind the fold even in a tall window. Names are cut short
-                // because a chip never wraps inside itself, and a whole sentence would run it off
-                // the edge of the dialog.
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing = egui::vec2(controls::GAP, controls::GAP);
-                    for folder in &folders {
-                        if controls::chip(ui, &truncate(folder, 28), None, false).clicked() {
-                            chosen = Some(Some(folder.clone()));
-                        }
+                ui.spacing_mut().item_spacing.y = 0.0;
+                for folder in &folders {
+                    let checked = here == Some(Some(folder.as_str()));
+                    if controls::menu_check_item(ui, &truncate(folder, 32), None, checked).clicked() {
+                        chosen = Some(Some(folder.clone()));
                     }
-                    if controls::chip(ui, t.no_folder, None, false).clicked() {
-                        chosen = Some(None);
-                    }
-                });
-            });
-
-        ui.add_space(controls::GAP_STACK);
-        controls::quiet_row(ui, |ui| {
-            if controls::button(ui, t.add_new_folder, Tone::Quiet, true).clicked() {
-                ui.ctx()
-                    .data_mut(|d| d.insert_temp(create_folder_key(), String::new()));
-                close = true;
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if controls::button(ui, t.cancel, Tone::Normal, true).clicked() {
-                    close = true;
+                }
+                if controls::menu_check_item(ui, t.no_folder, None, here == Some(None)).clicked() {
+                    chosen = Some(None);
                 }
             });
+        controls::menu_separator(ui);
+        ui.spacing_mut().item_spacing.y = 0.0;
+        if controls::menu_item(ui, Some(Glyph::Add), &new_folder, None, Tone::Normal, true).clicked() {
+            ui.ctx()
+                .data_mut(|d| d.insert_temp(create_folder_key(), String::new()));
+            close = true;
+        }
+
+        ui.add_space(controls::GAP_STACK);
+        controls::dialog_buttons(ui, |ui| {
+            if controls::button(ui, t.cancel, Tone::Normal, true).clicked() {
+                close = true;
+            }
         });
     });
 
@@ -2229,6 +2229,8 @@ pub fn show_create_folder_modal(ctx: &egui::Context, state: &mut AppState) {
     let mut close = false;
     let mut create = false;
 
+    // The button says what it does: nothing is being saved, a folder is being made.
+    let create_label = studio::text(state, "Crear", "Create", "Gumawa", "बनाएँ");
     let modal = controls::dialog(ctx, "library-create-folder").show(ctx, |ui| {
         let is_light = !ui.visuals().dark_mode;
         ui.set_width(controls::dialog_width(ctx, 380.0));
@@ -2269,7 +2271,7 @@ pub fn show_create_folder_modal(ctx: &egui::Context, state: &mut AppState) {
                 close = true;
             }
             let ready = !name.trim().is_empty();
-            if controls::button(ui, t.save, Tone::Primary, ready).clicked() || (enter && ready) {
+            if controls::button(ui, create_label, Tone::Primary, ready).clicked() || (enter && ready) {
                 create = true;
             }
         });
@@ -2501,17 +2503,3 @@ pub fn show_pending_confirm(ctx: &egui::Context, state: &mut AppState) {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::rows_taken;
-
-    #[test]
-    fn rows_wrap_like_horizontal_wrapped() {
-        assert_eq!(rows_taken([], 100.0, 10.0), 1);
-        // 40 + 10 + 50 is exactly the room: still one row.
-        assert_eq!(rows_taken([40.0, 50.0], 100.0, 10.0), 1);
-        assert_eq!(rows_taken([40.0, 51.0], 100.0, 10.0), 2);
-        // An item wider than the room gets a row to itself rather than an empty row before it.
-        assert_eq!(rows_taken([150.0, 20.0, 20.0], 100.0, 10.0), 2);
-    }
-}

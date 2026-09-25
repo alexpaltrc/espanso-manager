@@ -38,16 +38,9 @@ use crate::ui::studio;
 
 pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     let t = state.t();
-    let subtitle = studio::text(
-        state,
-        "Espanso, a tu manera.",
-        "Espanso, your way.",
-        "Espanso, sa paraan mo.",
-        "Espanso, आपके तरीके से।",
-    );
     // Fixed above the scroll area: this screen is taller than the window, and the way back has to
     // be one step from anywhere in it. See [`controls::page_header`].
-    if controls::page_header(ui, t.back, t.settings_title, subtitle) {
+    if controls::page_header(ui, t.back, t.settings_title, state.settings.lang) {
         state.view = View::List;
     }
 
@@ -55,24 +48,22 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     crate::ui::controls::page_scroll(ui, "settings", |ui| show_sections(ui, state));
 }
 
-/// One group of settings: a card with its name on top, in the same shape the editor's two steps and
-/// the folder screen's four blocks use.
+/// One group of settings: its name, then what it sets, straight on the window — the way the editor
+/// lays out its three parts.
 ///
-/// This screen has been through both halves of the argument. It was a stack of bordered cards, then
-/// a heading over a flat panel with a hairline under each group — and the flat version lost the one
-/// thing a settings screen needs, which is that a group reads as a group before you read a word of
-/// it. What settles it is that every other screen in the app now says "a titled block of a screen"
-/// the same way, and a settings group is exactly that.
+/// This screen has been a stack of cards, then flat, then cards again. It is flat now because every
+/// screen is: with a card around each group, the frames were the loudest thing on a page whose
+/// whole content is four quiet choices. The space between groups, wider than any space inside one,
+/// is what still makes a group read as a group.
 fn section(ui: &mut egui::Ui, title: &str, contents: impl FnOnce(&mut egui::Ui)) {
-    let is_light = !ui.visuals().dark_mode;
-    controls::section_frame(is_light).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        ui.label(controls::h3(title));
-        ui.add_space(controls::GAP_ROW);
-        contents(ui);
-    });
-    ui.add_space(controls::GAP_SECTION);
+    ui.label(controls::h3(title));
+    ui.add_space(controls::GAP_ROW);
+    contents(ui);
+    ui.add_space(GROUP_GAP);
 }
+
+/// Between two groups. The editor's gap between its parts, for the same reason.
+const GROUP_GAP: f32 = 28.0;
 
 /// The label over one control inside a group, for the two occasions a group holds more than one
 /// setting and the card's own title cannot name both.
@@ -248,10 +239,9 @@ fn show_sections(ui: &mut egui::Ui, state: &mut AppState) {
     ui.add_space(controls::GAP_STACK);
 }
 
-/// How much of a folder name a chip shows. Folder names come from the user and nothing stops one
-/// being a whole sentence; `horizontal_wrapped` wraps *between* chips, never inside one, so a name
-/// left whole would run a chip off the edge of the modal and clip against the window.
-const CHIP_NAME_MAX_CHARS: usize = 28;
+/// How much of a folder name a line shows. Folder names come from the user and nothing stops one
+/// being a whole sentence; a line does not wrap, so a name left whole would run off the dialog.
+const FOLDER_NAME_MAX_CHARS: usize = 32;
 
 /// The folder picker that stands in front of an export or an import.
 ///
@@ -259,14 +249,10 @@ const CHIP_NAME_MAX_CHARS: usize = 28;
 /// that one is: a modal belongs to the window rather than to the panel whose button opened it, and
 /// the document it is holding has to outlive the frame the button was pressed in.
 ///
-/// Chips rather than a column of checkboxes, because picking a folder by clicking its name is a
-/// gesture this app already has — the edit form's folder list — and because eight folders are two
-/// lines of chips against eight rows of checkbox. The running total underneath is what makes a lit
-/// chip unmistakably "included": the number moves as chips are clicked.
-///
-/// They are the library's own folder chips, name and count and all, so a folder looks the same
-/// here as it does above the list. This picker used to draw chips of its own, a second shape for
-/// the same thing.
+/// One line per folder, ticked or not, in the same line the folder menu and «Mover a una carpeta»
+/// use — so a folder is chosen the same way everywhere, and the check says what is included
+/// without a sentence explaining how to include it. The running total underneath moves as lines
+/// are ticked, which is what confirms the click did something.
 pub fn show_folder_picker(ctx: &egui::Context, state: &mut AppState) {
     let t = state.settings.t();
     let Some(pending) = &mut state.pending_transfer else {
@@ -278,7 +264,7 @@ pub fn show_folder_picker(ctx: &egui::Context, state: &mut AppState) {
     let mut confirm = false;
     let mut cancel = false;
 
-    // `pending` stays borrowed for as long as the chips are on screen, so the two buttons only
+    // `pending` stays borrowed for as long as the lines are on screen, so the two buttons only
     // record what was pressed. The transfer itself starts below, once that borrow is over.
     let modal = controls::dialog(ctx, "transfer_folders").show(ctx, |ui| {
         let is_light = !ui.visuals().dark_mode;
@@ -291,12 +277,10 @@ pub fn show_folder_picker(ctx: &egui::Context, state: &mut AppState) {
             }))
             .wrap(),
         );
-        ui.add_space(controls::GAP);
-        ui.add(egui::Label::new(controls::muted(t.transfer_pick_hint, is_light)).wrap());
 
         // Only worth offering once clicking them off one at a time is real work. With two or three
         // folders these buttons would be two more things to read for nothing. Quiet, so they read
-        // as shortcuts over the chips rather than as two more folders.
+        // as shortcuts over the list rather than as two more folders.
         if show_bulk {
             ui.add_space(controls::GAP);
             controls::quiet_row(ui, |ui| {
@@ -320,16 +304,16 @@ pub fn show_folder_picker(ctx: &egui::Context, state: &mut AppState) {
             .max_height(200.0)
             .auto_shrink([false, true])
             .show(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing = egui::vec2(controls::GAP, controls::GAP);
-                    for group in pending.groups.iter_mut() {
-                        let name = group.folder.as_deref().unwrap_or(t.no_folder);
-                        let name = crate::app::truncate(name, CHIP_NAME_MAX_CHARS);
-                        if controls::chip(ui, &name, Some(group.count), group.selected).clicked() {
-                            group.selected = !group.selected;
-                        }
+                ui.set_width(ui.available_width());
+                ui.spacing_mut().item_spacing.y = 0.0;
+                for group in pending.groups.iter_mut() {
+                    let name = group.folder.as_deref().unwrap_or(t.no_folder);
+                    let name = crate::app::truncate(name, FOLDER_NAME_MAX_CHARS);
+                    let count = group.count.to_string();
+                    if controls::check_line(ui, &name, Some(&count), group.selected).clicked() {
+                        group.selected = !group.selected;
                     }
-                });
+                }
             });
 
         let chosen: usize = pending

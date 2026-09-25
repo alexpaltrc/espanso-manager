@@ -38,12 +38,16 @@
 //! deliberately does not warn about the pair the prefix box itself produces. Read its own comment
 //! before adding a case to it; espanso's matcher makes most of the pairs that look dangerous safe.
 //!
-//! ## Two numbered steps, and a third card that is not one
+//! ## Three parts, no cards and no numbers
 //!
-//! The form is **1. Cuando escribes** and **2. Aparece este texto**, in that order and named with
-//! those words, because they are the two halves of what an expansion is and the same two words head
-//! the library's columns. The folder follows in a card of its own and is deliberately *not*
-//! numbered: it changes nothing about what espanso does, and a step three would say it did.
+//! The form reads **Cuando escribes**, **Aparece este texto** and then the folder, in that order,
+//! each under a plain heading on the window itself. They were once numbered cards; the order already
+//! says which comes first, and a card around every part is a frame around nothing.
+//!
+//! ## Leaving is asked about only when there is something to lose
+//!
+//! The form is copied as it stood when the screen was arrived at. Esc and Cancelar leave at once
+//! while the draft still matches that copy, and ask «¿Descartar los cambios?» once it does not.
 //!
 //! ## Validation is a thing the form knows, not a thing saving discovers
 //!
@@ -59,6 +63,7 @@ use crate::datefmt;
 use crate::i18n::{fill, Lang, Strings};
 use crate::yaml::model::{SimpleMatch, VarEntry};
 use crate::ui::controls::{self, Tone};
+use crate::ui::keys;
 use crate::ui::studio;
 use crate::yaml::presets::{build_custom_date_var, month_lang_of, DatePreset};
 
@@ -80,10 +85,11 @@ const PREVIEW_MAX_HEIGHT: f32 = 168.0;
 /// boxes — which is also the plan's rule about not scaling controls indiscriminately, read the
 /// other way round.
 const FORM_MAX_WIDTH: f32 = 880.0;
-/// Diameter of the circle a step number sits in.
-const BADGE: f32 = 24.0;
 /// Width of the prefix box. Wide enough for the longest suggestion ("//") with the field padding
 /// around it, and no wider — the prefix is one or two symbols, not a sentence.
+/// Between the three parts of the form. With no card around each, the space is what tells them
+/// apart, so it is wider than the gap between two things inside one part.
+const PART_GAP: f32 = 28.0;
 const PREFIX_FIELD_WIDTH: f32 = 72.0;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -514,13 +520,50 @@ fn problem_text(state: &AppState, t: &'static Strings, problem: &Problem) -> Str
 
 // --- The screen ---------------------------------------------------------------------------------
 
+/// The form as it stood when the screen was arrived at, kept to tell a draft that has been touched
+/// from one that has not. Only a touched one is worth a question on the way out.
+fn original_key() -> egui::Id {
+    egui::Id::new("editor-original")
+}
+
+/// The frame the form was last drawn on, so arriving at it can be told apart from staying on it.
+fn seen_key() -> egui::Id {
+    egui::Id::new("editor-seen")
+}
+
+/// Set while «¿Descartar los cambios?» is on screen.
+fn confirm_discard_key() -> egui::Id {
+    egui::Id::new("editor-confirm-discard")
+}
+
 pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     let View::Edit(edit) = &state.view else {
         return;
     };
     let edit = edit.clone();
     let t = state.t();
+    let lang = state.settings.lang;
     let is_light = !ui.visuals().dark_mode;
+    let ctx = ui.ctx().clone();
+    // Read before anything here draws a popup: the folder list closes itself on this frame's Esc,
+    // and that Esc must not also close the form behind it.
+    let popup_was_open = egui::Popup::is_any_open(&ctx);
+
+    let frame = ctx.cumulative_frame_nr();
+    let arriving = ctx
+        .data(|d| d.get_temp::<u64>(seen_key()))
+        .is_none_or(|last| last + 1 < frame);
+    ctx.data_mut(|d| d.insert_temp(seen_key(), frame));
+    if arriving {
+        ctx.data_mut(|d| {
+            d.insert_temp(original_key(), edit.clone());
+            d.remove::<bool>(confirm_discard_key());
+        });
+    }
+    let dirty = ctx
+        .data(|d| d.get_temp::<EditState>(original_key()))
+        .is_none_or(|original| original != edit);
+    let confirming = ctx.data(|d| d.get_temp::<bool>(confirm_discard_key())).unwrap_or(false);
 
     // Worked out before a single widget is drawn, so that the message inside the form and the state
     // of the button at the foot are one answer rather than two that agree most of the time. Both
@@ -532,6 +575,28 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     let mut save = false;
     let mut cancel = false;
     let mut delete = false;
+
+    // The title, centred like the library's, above everything that scrolls.
+    egui::Panel::top("editor-title")
+        .resizable(false)
+        .show_separator_line(false)
+        .frame(egui::Frame::default().inner_margin(egui::Margin {
+            left: 0,
+            right: 0,
+            top: 0,
+            bottom: controls::GAP_SECTION as i8,
+        }))
+        .show(ui, |ui| {
+            let title = if edit.editing_index.is_none() {
+                t.edit_title_new
+            } else {
+                t.edit_title_existing
+            };
+            ui.set_min_height(controls::FIELD_HEIGHT);
+            ui.vertical_centered(|ui| {
+                ui.add(egui::Label::new(controls::h1(title)).wrap());
+            });
+        });
 
     // The actions get a strip of their own at the foot of the window, in the same place whatever
     // the form's height: a form long enough to scroll must not be able to scroll its own Guardar
@@ -545,24 +610,33 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
             bottom: 2,
         }))
         .show(ui, |ui| {
+            // Rule and buttons both keep to the form's own width, so the strip reads as the foot
+            // of the form rather than of the window.
+            let full = ui.available_width();
+            let margin = ((full - full.min(FORM_MAX_WIDTH)) * 0.5).max(0.0);
             // The rule sits on the panel's own top edge, which is the inner margin above where the
             // content begins — it separates the strip from the form, so it cannot be inside it.
+            let edge = ui.max_rect();
             ui.painter().hline(
-                ui.max_rect().x_range(),
-                ui.max_rect().top() - controls::GAP_SECTION,
+                (edge.left() + margin)..=(edge.right() - margin),
+                edge.top() - controls::GAP_SECTION,
                 egui::Stroke::new(1.0, crate::app::hairline(is_light)),
             );
             ui.horizontal(|ui| {
+                ui.set_max_width(full - margin);
+                ui.add_space(margin);
                 ui.spacing_mut().item_spacing.x = controls::GAP_ROW;
                 let saving = controls::button(ui, t.save, Tone::Primary, can_save);
                 save = match &problem {
                     // Says why it cannot be pressed at the moment somebody tries to press it, which
                     // is a different moment from reading the form.
                     Some(problem) => saving.on_disabled_hover_text(problem_text(state, t, problem)),
-                    None => saving.on_hover_text("Ctrl+S"),
+                    None => saving.on_hover_text(keys::tip(t.save, keys::SAVE, lang)),
                 }
                 .clicked();
-                cancel = controls::button(ui, t.cancel, Tone::Normal, true).clicked();
+                cancel = controls::button(ui, t.cancel, Tone::Normal, true)
+                    .on_hover_text(keys::tip(t.cancel, keys::BACK, lang))
+                    .clicked();
                 if edit.editing_index.is_some() {
                     // Across the strip from Guardar rather than beside it. It is the one action
                     // here that cannot be taken back from this screen.
@@ -576,23 +650,44 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
         });
 
     controls::page_scroll(ui, "editor-body", |ui| {
-            let full = ui.available_width();
-            let width = full.min(FORM_MAX_WIDTH);
-            ui.horizontal(|ui| {
-                // The margin is the whole point of the horizontal, so nothing else may add to it.
-                ui.spacing_mut().item_spacing.x = 0.0;
-                ui.add_space(((full - width) * 0.5).max(0.0));
-                ui.vertical(|ui| {
-                    ui.set_width(width);
-                    show_form(ui, state, edit, problem.as_ref(), is_light);
-                });
+        let full = ui.available_width();
+        let width = full.min(FORM_MAX_WIDTH);
+        ui.horizontal(|ui| {
+            // The margin is the whole point of the horizontal, so nothing else may add to it.
+            ui.spacing_mut().item_spacing.x = 0.0;
+            ui.add_space(((full - width) * 0.5).max(0.0));
+            ui.vertical(|ui| {
+                ui.set_width(width);
+                show_form(ui, state, edit, problem.as_ref(), is_light);
             });
         });
+    });
 
     // Read on every frame so the key never falls through to another screen, and acted on only when
     // the button beside it could have been pressed: the shortcut is the button, not a way past it.
-    let ctrl_s = ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::S));
-    save |= ctrl_s && can_save;
+    let ctrl_s = keys::pressed(&ctx, keys::SAVE);
+    save |= ctrl_s && can_save && !confirming;
+
+    // Esc is Cancelar. Not while a list is open over the form — that Esc closes the list — nor
+    // while a dialog is up, which answers its own Esc.
+    let blocked = popup_was_open || confirming || state.pending_confirm.is_some();
+    if !blocked && keys::pressed(&ctx, keys::BACK) {
+        cancel = true;
+    }
+
+    // Leaving a form that has been written in is asked about; leaving one that has not is not.
+    // A question every time would teach people to answer it without reading.
+    let mut leave = false;
+    if cancel {
+        if dirty {
+            ctx.data_mut(|d| d.insert_temp(confirm_discard_key(), true));
+        } else {
+            leave = true;
+        }
+    }
+    if confirming && discard_dialog(&ctx, state) {
+        leave = true;
+    }
 
     if let View::Edit(edit) = &state.view {
         let edit = edit.clone();
@@ -602,9 +697,10 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
             // Only on the way out. A refused save leaves the form open with its banner, and the
             // library has nothing to point at.
             if matches!(state.view, View::List) {
-                super::list_view::mark_saved(ui.ctx(), &trigger);
+                super::list_view::mark_saved(&ctx, &trigger);
             }
-        } else if cancel {
+        } else if leave {
+            ctx.data_mut(|d| d.remove::<bool>(confirm_discard_key()));
             state.view = View::List;
         } else if delete {
             if let Some(index) = edit.editing_index {
@@ -614,30 +710,63 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     }
 }
 
-/// The heading of one of the two steps: its number in a ring, then its name.
-///
-/// The number is painted rather than written into the translated string. Four languages would each
-/// have to remember to start with "1." and to write it the same way, and the two headings would
-/// then begin at whatever x their own punctuation happened to leave them at.
-fn step_heading(ui: &mut egui::Ui, number: &str, title: &str, is_light: bool) {
-    let accent = crate::app::accent(ui.visuals());
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = controls::GAP_ROW;
-        let (rect, _) = ui.allocate_exact_size(egui::Vec2::splat(BADGE), egui::Sense::hover());
-        let centre = rect.center();
-        ui.painter()
-            .circle_filled(centre, BADGE / 2.0, crate::app::selection_tint(is_light, accent));
-        ui.painter()
-            .circle_stroke(centre, BADGE / 2.0, egui::Stroke::new(1.0, accent));
-        ui.painter().text(
-            centre,
-            egui::Align2::CENTER_CENTER,
-            number,
-            egui::FontId::proportional(13.0),
-            accent,
+/// «¿Descartar los cambios?» Returns true once the answer is to throw them away; answering the
+/// other way, pressing Esc or clicking beside the dialog puts the form back as it was.
+fn discard_dialog(ctx: &egui::Context, state: &AppState) -> bool {
+    let mut discard = false;
+    let mut stay = false;
+    let modal = controls::dialog(ctx, "editor-discard").show(ctx, |ui| {
+        let is_light = !ui.visuals().dark_mode;
+        ui.set_width(controls::dialog_width(ctx, 380.0));
+        ui.label(controls::h3(studio::text(
+            state,
+            "¿Descartar los cambios?",
+            "Discard your changes?",
+            "Itapon ang mga pagbabago?",
+            "बदलाव छोड़ दें?",
+        )));
+        ui.add_space(controls::GAP);
+        ui.add(
+            egui::Label::new(controls::muted(
+                studio::text(
+                    state,
+                    "Lo que escribiste en este formulario no se guardará.",
+                    "What you wrote in this form will not be saved.",
+                    "Hindi mase-save ang isinulat mo sa form na ito.",
+                    "इस फ़ॉर्म में जो लिखा है वह सहेजा नहीं जाएगा।",
+                ),
+                is_light,
+            ))
+            .wrap(),
         );
-        ui.add(egui::Label::new(controls::h3(title)).wrap());
+        ui.add_space(controls::GAP_STACK);
+        controls::dialog_buttons(ui, |ui| {
+            let keep = studio::text(
+                state,
+                "Seguir editando",
+                "Keep editing",
+                "Ituloy ang pag-edit",
+                "संपादन जारी रखें",
+            );
+            if controls::button(ui, keep, Tone::Primary, true).clicked() {
+                stay = true;
+            }
+            let drop = studio::text(state, "Descartar", "Discard", "Itapon", "छोड़ें");
+            if controls::button(ui, drop, Tone::Danger, true).clicked() {
+                discard = true;
+            }
+        });
     });
+    if modal.should_close() || stay {
+        ctx.data_mut(|d| d.remove::<bool>(confirm_discard_key()));
+    }
+    discard
+}
+
+/// The name of one part of the form. Plain words: the parts come in the order they are filled in,
+/// and a number beside each would only say so again.
+fn section_heading(ui: &mut egui::Ui, title: &str) {
+    ui.add(egui::Label::new(controls::h3(title)).wrap());
 }
 
 /// "Escribirás: `:firma`" — the two boxes read back as the one thing espanso will watch for.
@@ -671,7 +800,7 @@ fn trigger_line(ui: &mut egui::Ui, t: &'static Strings, trigger: &str, is_light:
     });
 }
 
-/// Step 1: the two boxes that make the trigger, what they add up to, and anything wrong with it.
+/// What you type: the two boxes that make the trigger, what they add up to, and anything wrong with it.
 fn when_you_type(
     ui: &mut egui::Ui,
     state: &AppState,
@@ -680,11 +809,10 @@ fn when_you_type(
     is_light: bool,
 ) {
     let t = state.t();
-    controls::section_frame(is_light).show(ui, |ui| {
+    ui.vertical(|ui| {
         ui.set_width(ui.available_width());
-        step_heading(
+        section_heading(
             ui,
-            "1",
             studio::text(
                 state,
                 "Cuando escribes",
@@ -692,7 +820,6 @@ fn when_you_type(
                 "Kapag tina-type mo",
                 "जब आप लिखते हैं",
             ),
-            is_light,
         );
         ui.add_space(controls::GAP_WIDE);
 
@@ -712,7 +839,7 @@ fn when_you_type(
             );
             ui.add(
                 controls::text_field(&mut edit.word)
-                    .desired_width((ui.available_width() - controls::GAP).max(90.0))
+                    .desired_width(ui.available_width().max(90.0))
                     .hint_text(t.word_field_hint),
             );
         });
@@ -752,14 +879,13 @@ fn when_you_type(
     });
 }
 
-/// Step 2: text or date, whichever this is, and what it will actually produce.
+/// What appears: text or date, whichever this is, and what it will actually produce.
 fn appears_here(ui: &mut egui::Ui, state: &AppState, edit: &mut EditState, is_light: bool) {
     let t = state.t();
-    controls::section_frame(is_light).show(ui, |ui| {
+    ui.vertical(|ui| {
         ui.set_width(ui.available_width());
-        step_heading(
+        section_heading(
             ui,
-            "2",
             studio::text(
                 state,
                 "Aparece este texto",
@@ -767,7 +893,6 @@ fn appears_here(ui: &mut egui::Ui, state: &AppState, edit: &mut EditState, is_li
                 "Lalabas ang tekstong ito",
                 "यह टेक्स्ट दिखता है",
             ),
-            is_light,
         );
         ui.add_space(controls::GAP_WIDE);
 
@@ -1056,11 +1181,11 @@ fn preview_pair(ui: &mut egui::Ui, state: &AppState, edit: &EditState, is_light:
     ui.label(controls::small_muted(footnote, is_light));
 }
 
-/// Where this expansion is filed. Deliberately *not* numbered: it changes nothing about what
-/// espanso does, and a step three would say that it did.
+/// Where this expansion is filed. Last, and quieter than the other two: it changes nothing about
+/// what espanso does.
 fn folder_card(ui: &mut egui::Ui, state: &AppState, edit: &mut EditState, is_light: bool) {
     let t = state.t();
-    controls::section_frame(is_light).show(ui, |ui| {
+    ui.vertical(|ui| {
         ui.set_width(ui.available_width());
         // The string carries the colon it needs as a field label; as a heading it does not.
         ui.label(controls::h3(t.folder_optional.trim_end_matches(':')));
@@ -1130,7 +1255,7 @@ fn folder_card(ui: &mut egui::Ui, state: &AppState, edit: &mut EditState, is_lig
                 ui.label(controls::field_label(t.name_label));
                 ui.add(
                     controls::text_field(&mut edit.new_folder_input)
-                        .desired_width((ui.available_width() - controls::GAP).max(120.0))
+                        .desired_width(ui.available_width().max(120.0))
                         .hint_text(t.new_folder_placeholder),
                 );
             });
@@ -1138,9 +1263,10 @@ fn folder_card(ui: &mut egui::Ui, state: &AppState, edit: &mut EditState, is_lig
     });
 }
 
-/// The form itself: a title, two numbered steps and the folder.
+/// The form itself: what you type, what appears, and the folder. The title sits above it, outside
+/// the scroll.
 ///
-/// It takes `edit` by value and puts it back at the end, which is what lets the two steps hold
+/// It takes `edit` by value and puts it back at the end, which is what lets the parts hold
 /// `&mut EditState` without the borrow checker having to reason about `state.view` at the same
 /// time. The draft is one thing throughout the frame, and it is written back once.
 fn show_form(
@@ -1150,36 +1276,11 @@ fn show_form(
     problem: Option<&Problem>,
     is_light: bool,
 ) {
-    let t = state.t();
-    let is_new = edit.editing_index.is_none();
-
-    ui.label(controls::h2(if is_new {
-        t.edit_title_new
-    } else {
-        t.edit_title_existing
-    }));
-    ui.add_space(controls::GAP_TIGHT);
-    // Says what the screen is rather than admiring what the app does. The previous line here — "Unas
-    // pocas teclas se convierten en algo más" — was a slogan, and a slogan at the top of a form is a
-    // line of text that answers none of the questions somebody opening the form actually has.
-    ui.label(controls::muted(
-        studio::text(
-            state,
-            "Dos pasos: elige qué escribes y qué debe aparecer.",
-            "Two steps: choose what you type and what should appear.",
-            "Dalawang hakbang: piliin ang ita-type at ang dapat lumabas.",
-            "दो चरण: क्या लिखना है और क्या दिखना चाहिए।",
-        ),
-        is_light,
-    ));
-    ui.add_space(controls::GAP_STACK);
-
     when_you_type(ui, state, &mut edit, problem, is_light);
-    ui.add_space(controls::GAP_SECTION);
+    ui.add_space(PART_GAP);
     appears_here(ui, state, &mut edit, is_light);
-    ui.add_space(controls::GAP_SECTION);
+    ui.add_space(PART_GAP);
     folder_card(ui, state, &mut edit, is_light);
-    // The action strip below is a surface of its own; without this the last card butts into it.
     ui.add_space(controls::GAP);
 
     // The draft is its own state, and a change to it has to show up on the next frame rather than

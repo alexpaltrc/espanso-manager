@@ -39,7 +39,7 @@
 //!
 //! Nothing here writes to disk. Every action is a call into `AppState`.
 
-use crate::app::{self, AppState, View};
+use crate::app::{AppState, View};
 use crate::ui::controls::{self, Tone};
 use crate::ui::studio;
 
@@ -56,6 +56,10 @@ struct PrefixDraft {
 fn draft_key(folder: &str) -> egui::Id {
     egui::Id::new("folder-prefix-draft").with(folder)
 }
+
+/// Between the four things this screen does. With no card around each, the space is what tells
+/// them apart; the editor uses the same.
+const PART_GAP: f32 = 28.0;
 
 /// How many `antes → después` lines are shown before the rest are summed up.
 const RENAMES_SHOWN: usize = 6;
@@ -98,20 +102,10 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
         state.start_rename_folder(&folder);
     }
 
-    let mut go_back = false;
+    // The folder's name is the page's title, above the scroll like every other page's.
+    let go_back = controls::page_header(ui, t.back, &folder, state.settings.lang);
 
     controls::page_scroll(ui, ("folder-options", &folder), |ui| {
-            // No chevron in front of it. A glyph here would have to be one the icon family really
-            // draws on every machine, and the word alone has never been ambiguous.
-            if controls::quiet_row(ui, |ui| controls::button(ui, t.back, Tone::Quiet, true))
-                .clicked()
-            {
-                go_back = true;
-            }
-            ui.add_space(controls::GAP_WIDE);
-
-            ui.add(egui::Label::new(controls::h2(&folder)).wrap());
-            ui.add_space(controls::GAP_TIGHT);
             ui.label(controls::muted(
                 crate::i18n::fill(
                     studio::plural(
@@ -135,14 +129,14 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                 ),
                 is_light,
             ));
-            ui.add_space(controls::GAP_STACK);
+            ui.add_space(PART_GAP);
 
             name_section(ui, state, is_light);
-            ui.add_space(controls::GAP_SECTION);
+            ui.add_space(PART_GAP);
             prefix_section(ui, state, &folder, &prefixes, is_light);
-            ui.add_space(controls::GAP_SECTION);
+            ui.add_space(PART_GAP);
             export_section(ui, state, &folder, count, is_light);
-            ui.add_space(controls::GAP_SECTION);
+            ui.add_space(PART_GAP);
             delete_section(ui, state, &folder, count, is_light);
             ui.add_space(controls::GAP_STACK);
         });
@@ -159,7 +153,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
 
 fn name_section(ui: &mut egui::Ui, state: &mut AppState, is_light: bool) {
     let t = state.t();
-    controls::section_frame(is_light).show(ui, |ui| {
+    ui.vertical(|ui| {
         ui.set_width(ui.available_width());
         ui.label(controls::h3(studio::text(
             state,
@@ -225,7 +219,7 @@ fn prefix_section(
     let t = state.t();
     let none_label = studio::text(state, "Sin prefijo", "No prefix", "Walang prefix", "कोई उपसर्ग नहीं");
 
-    controls::section_frame(is_light).show(ui, |ui| {
+    ui.vertical(|ui| {
         ui.set_width(ui.available_width());
         ui.label(controls::h3(studio::text(
             state,
@@ -382,7 +376,7 @@ fn export_section(
     count: usize,
     is_light: bool,
 ) {
-    controls::section_frame(is_light).show(ui, |ui| {
+    ui.vertical(|ui| {
         ui.set_width(ui.available_width());
         ui.label(controls::h3(studio::text(
             state,
@@ -417,18 +411,17 @@ fn delete_section(
     count: usize,
     is_light: bool,
 ) {
-    controls::section_frame(is_light).show(ui, |ui| {
+    ui.vertical(|ui| {
         ui.set_width(ui.available_width());
-        ui.label(
-            controls::h3(studio::text(
-                state,
-                "Eliminar carpeta",
-                "Delete folder",
-                "Tanggalin ang folder",
-                "फ़ोल्डर हटाएँ",
-            ))
-            .color(app::danger(is_light)),
-        );
+        // A plain heading: the button below already wears the colour of danger, and saying it twice
+        // is how red stops meaning anything.
+        ui.label(controls::h3(studio::text(
+            state,
+            "Eliminar carpeta",
+            "Delete folder",
+            "Tanggalin ang folder",
+            "फ़ोल्डर हटाएँ",
+        )));
         ui.add_space(controls::GAP_ROW);
 
         // The one sentence this screen exists to make unmissable. Said here, before the button,
@@ -464,7 +457,13 @@ fn delete_section(
                 &[("n", &count.to_string())],
             )
         };
-        controls::notice(ui, &warning, Tone::Danger);
+        // Only a folder with something in it gets the warning box. An empty one loses nothing, and
+        // an alarm for nothing teaches people to read past the one that matters.
+        if count == 0 {
+            ui.label(controls::muted(&warning, is_light));
+        } else {
+            controls::notice(ui, &warning, Tone::Danger);
+        }
         ui.add_space(controls::GAP_ROW);
 
         let label = if count == 0 {

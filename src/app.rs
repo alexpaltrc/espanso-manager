@@ -1503,125 +1503,145 @@ impl AppState {
 
 // --- The palette ------------------------------------------------------------------------------
 //
-// One token set, defined once here, for every screen. Light keeps the values the approved
-// renovation fixed (`output/ui-plan-2026-09-20.md`, §8). Dark was re-cut on 2026-09-24 to four
-// values chosen by hand: a near-black window, #242424 surfaces, #E6E6E6 text and #C8C8C8 for the
-// quieter half. The accent is not ours at all — it is the one the user picked in Windows, in the
-// shade Fluent assigns to each theme (see [`crate::theme::system_accent`]).
+// One token set, defined once here, for every screen: Windows 11's own, as WinUI 3 states them.
+// WinUI gives most of its fills as a translucent white or black over the window; they are resolved
+// here over the surface they are drawn on, because a stored alpha would be mixed with whatever
+// happened to be behind it.
 //
-// **Dark is not an inversion of light.** Its surface sits *above* its background, its muted text is
-// lighter rather than darker, and its accent is a pale shade instead of the saturated one light
-// uses — a saturated accent on a dark panel reads as a glow, not as a colour.
+//                      dark       light
+//   window             #202020    #F3F3F3   the neutral grey Settings and Explorer sit on
+//   layer              #2B2B2B    #FBFBFB   the inspector, a section, a dialog
+//   sunken             #1C1C1C    #F3F3F3   a block of content set into a layer
+//   control            #2D2D2D    #FFFFFF   a button's body, a field
+//   divider            #333333    #E0E0E0   between two rows; round a layer
+//   control border     #454545    #D4D4D4   round something you press or type in
+//   text               #FFFFFF    #1B1B1B
+//   secondary text     #CFCFCF    #5F5F5F   labels, the quieter half of a pair
+//   tertiary text      #9E9E9E    #707070   previews and captions — still AA on the window
+//
+// The accent is not ours at all — it is the one the user picked in Windows, in the shade Fluent
+// assigns to each theme (see [`crate::theme::system_accent`]) — and it is spent sparingly: the
+// trigger, the bar beside the chosen row, the one primary button, focus.
+//
+// **Contrast themes win.** While one is on, every role above resolves to the colour the user chose
+// for it in Windows (see [`crate::theme::ContrastPalette`]) and no tint is mixed at all: a contrast
+// theme is an accessibility setting, and a blend of two of its colours is a colour it did not pick.
 //
 // Everything below is a `fn(is_light)`, never a stored pair, so a frame can never be drawn half in
 // one theme and half in the other.
 
-/// The window itself — the surface every card sits *on*, never the card.
+static CONTRAST: std::sync::RwLock<Option<crate::theme::ContrastPalette>> =
+    std::sync::RwLock::new(None);
+
+/// The contrast theme in force, if any. A read lock and a copy: cheap enough to ask per widget.
+pub fn contrast() -> Option<crate::theme::ContrastPalette> {
+    CONTRAST.read().ok().and_then(|c| *c)
+}
+
+/// Re-reads whether a contrast theme is on. `true` when that changed since the last read.
+pub fn refresh_contrast() -> bool {
+    let now = crate::theme::contrast_palette();
+    let Ok(mut stored) = CONTRAST.write() else {
+        return false;
+    };
+    let changed = *stored != now;
+    *stored = now;
+    changed
+}
+
+/// Whether the contrast theme in force is a light one, so egui's own widgets pick the right half.
+pub fn contrast_is_light() -> Option<bool> {
+    contrast().map(|c| {
+        let w = rgb(c.window);
+        0.2126 * w.r() as f32 + 0.7152 * w.g() as f32 + 0.0722 * w.b() as f32 > 128.0
+    })
+}
+
+fn rgb(c: [u8; 3]) -> egui::Color32 {
+    egui::Color32::from_rgb(c[0], c[1], c[2])
+}
+
+/// One token: its dark value, its light value, and what it becomes under a contrast theme.
+fn token(
+    is_light: bool,
+    dark: u32,
+    light: u32,
+    contrast_role: fn(&crate::theme::ContrastPalette) -> [u8; 3],
+) -> egui::Color32 {
+    if let Some(c) = contrast() {
+        return rgb(contrast_role(&c));
+    }
+    let v = if is_light { light } else { dark };
+    egui::Color32::from_rgb((v >> 16) as u8, (v >> 8) as u8, v as u8)
+}
+
+/// The window itself — the surface every layer sits *on*, never the layer.
 pub fn win_background_for(is_light: bool) -> egui::Color32 {
     win_background(is_light)
 }
 
 fn win_background(is_light: bool) -> egui::Color32 {
-    if is_light {
-        egui::Color32::from_rgb(0xF6, 0xF7, 0xFB)
-    } else {
-        egui::Color32::from_rgb(0x03, 0x03, 0x03)
-    }
+    token(is_light, 0x202020, 0xF3F3F3, |c| c.window)
 }
 
-/// Raised surfaces: a list, a section of the editor, a modal.
+/// A layer: the inspector, a section of a screen, a dialog.
 pub fn win_card_for(is_light: bool) -> egui::Color32 {
     win_card(is_light)
 }
 
 fn win_card(is_light: bool) -> egui::Color32 {
-    if is_light {
-        egui::Color32::from_rgb(0xFF, 0xFF, 0xFF)
-    } else {
-        egui::Color32::from_rgb(0x24, 0x24, 0x24)
-    }
+    token(is_light, 0x2B2B2B, 0xFBFBFB, |c| c.window)
 }
 
-/// A label stamped *into* a card rather than raised off it — a folder's name shown as a tag.
-///
-/// In light that is simply the window's colour, a hair below the white card. In dark the window is
-/// nearly black, and a tag filled with it would read as a hole punched in the card; a third of the
-/// way from the card towards the window keeps the same single step down that light has.
+/// A block of content set *into* a layer: the full text of an expansion, a folder shown as a tag.
 pub fn win_sunken_for(is_light: bool) -> egui::Color32 {
-    if is_light {
-        win_background(is_light)
-    } else {
-        mix(win_card(is_light), win_background(is_light), 0.3)
-    }
+    token(is_light, 0x1C1C1C, 0xF3F3F3, |c| c.window)
 }
 
-/// The body of a button or other control.
-///
-/// Deliberately the same value as a card: in this design a control is told apart by its outline and
-/// its padding, not by a fill of its own. That is what keeps a row of buttons from looking like a
-/// row of tiles.
+/// The body of a button or field.
 pub fn win_control_for(is_light: bool) -> egui::Color32 {
     win_control(is_light)
 }
 
 fn win_control(is_light: bool) -> egui::Color32 {
-    win_card(is_light)
+    token(is_light, 0x2D2D2D, 0xFFFFFF, |c| c.button_face)
 }
 
 /// The same control while the pointer is over it.
 fn win_control_hover(is_light: bool) -> egui::Color32 {
-    if is_light {
-        egui::Color32::from_rgb(0xF0, 0xF1, 0xF5)
-    } else {
-        egui::Color32::from_rgb(0x2E, 0x2E, 0x2E)
-    }
+    token(is_light, 0x323232, 0xF6F6F6, |c| c.button_face)
 }
 
 /// Pressed.
 fn win_control_active(is_light: bool) -> egui::Color32 {
-    if is_light {
-        egui::Color32::from_rgb(0xE8, 0xE9, 0xEF)
-    } else {
-        egui::Color32::from_rgb(0x36, 0x36, 0x36)
-    }
+    token(is_light, 0x272727, 0xF0F0F0, |c| c.button_face)
 }
 
-/// The one line colour: around a control, around a card, and between two rows.
+/// The divider: between two rows, round a layer.
 fn win_stroke(is_light: bool) -> egui::Color32 {
-    if is_light {
-        egui::Color32::from_rgb(0xDC, 0xDF, 0xE8)
-    } else {
-        egui::Color32::from_rgb(0x3D, 0x3D, 0x3D)
-    }
+    token(is_light, 0x333333, 0xE0E0E0, |c| c.text)
 }
 
 /// Primary text.
 fn win_text(is_light: bool) -> egui::Color32 {
-    if is_light {
-        egui::Color32::from_rgb(0x24, 0x26, 0x30)
-    } else {
-        egui::Color32::from_rgb(0xE6, 0xE6, 0xE6)
-    }
+    token(is_light, 0xFFFFFF, 0x1B1B1B, |c| c.text)
 }
 
-/// Supporting text — hints, counts, the quieter half of a pair.
-///
-/// There are exactly two text colours in this design. Anything that was a third one now resolves
-/// here, which is what stops a screen from ending up with four greys that nobody chose.
+/// Labels, and the quieter half of a pair.
 fn win_text_secondary(is_light: bool) -> egui::Color32 {
-    if is_light {
-        egui::Color32::from_rgb(0x60, 0x65, 0x77)
-    } else {
-        egui::Color32::from_rgb(0xC8, 0xC8, 0xC8)
-    }
+    token(is_light, 0xCFCFCF, 0x5F5F5F, |c| c.text)
 }
 
 /// The user's Windows accent, in the shade this theme uses.
 ///
 /// A registry read, so it is called only when the palette is (re)built — never from drawing code.
 /// Widgets that need the accent read it back out of the palette with [`accent`], which is a field
-/// access.
+/// access. Under a contrast theme it is the colour Windows gives links: the one of its colours
+/// meant to be read as coloured text on the window.
 fn read_system_accent(is_light: bool) -> egui::Color32 {
+    if let Some(c) = contrast() {
+        return rgb(c.hotlight);
+    }
     let (r, g, b) = crate::theme::system_accent(is_light);
     egui::Color32::from_rgb(r, g, b)
 }
@@ -1630,37 +1650,46 @@ fn read_system_accent(is_light: bool) -> egui::Color32 {
 ///
 /// [`tuned_visuals`] stores it in the palette, so every widget can read the same value for free
 /// instead of each one going back to the registry. That distinction matters: this is called once
-/// per folder and once per row, on every frame, and a registry read in that position turns a list
-/// of eighty folders into eighty registry reads sixty times a second.
+/// per row, on every frame, and a registry read in that position turns a list of eighty rows into
+/// eighty registry reads sixty times a second.
 pub fn accent(visuals: &egui::Visuals) -> egui::Color32 {
     visuals.hyperlink_color
 }
 
-/// Bumps up the default egui text sizes and widget spacing so the interface reads comfortably at
-/// this window's size instead of the tiny defaults egui ships with.
+/// A fill in the accent — the primary button, a ticked box — and the ink written on it.
+pub fn accent_fill(visuals: &egui::Visuals) -> (egui::Color32, egui::Color32) {
+    match contrast() {
+        Some(c) => (rgb(c.highlight), rgb(c.highlight_text)),
+        None => {
+            let fill = accent(visuals);
+            (fill, readable_on(fill))
+        }
+    }
+}
+
+/// Sets Windows 11's type ramp and control metrics.
 ///
 /// Applied once at startup and never again: it only touches `text_styles` and `spacing`, which
 /// `Context::set_visuals` does not overwrite — unlike the palette in [`tuned_visuals`], which has to
 /// be re-applied on every theme switch.
 fn apply_layout_style(ctx: &egui::Context, text_scale: f32) {
-    // Windows 11's own type ramp, in the same units egui measures in, rather than egui's defaults
-    // multiplied by some factor. Scaling the defaults is how the interface ended up with 11-point
-    // labels: egui's "small" starts at 9, and no amount of multiplying makes a 9 into a caption.
+    // Windows 11's own ramp, in the same units egui measures in, rather than egui's defaults
+    // multiplied by some factor:
     //
     //   Body / Button  14   the size nearly everything is set in
-    //   Caption        12   hints and counts, and nothing that names a thing
-    //   Subtitle       20   the heading at the top of a screen
-    //   Monospace      13   triggers; a hair under body so it doesn't out-weigh it
+    //   Caption        12   counts, captions, key names — never a thing's name
+    //   Subtitle       20   Semibold: the title of a screen or a dialog
+    //   Monospace      13   triggers; a hair under body so they do not outweigh it
     //
-    // Anything that names something — a folder, a section, a field — is Body. Weight and colour do
-    // the separating, not size; that is what keeps a hierarchy readable instead of merely small.
+    // Two weights, Regular and Semibold, as Fluent asks. Weight and colour do the separating, not
+    // size; that is what keeps a hierarchy readable instead of merely small.
     let size = |points: f32| (points * text_scale).round();
 
     ctx.all_styles_mut(|style| {
         use egui::{FontFamily, FontId, TextStyle};
         style.text_styles.insert(
             TextStyle::Heading,
-            FontId::new(size(25.0), FontFamily::Proportional),
+            FontId::new(size(20.0), crate::fonts::semibold_family()),
         );
         style.text_styles.insert(
             TextStyle::Body,
@@ -1679,17 +1708,19 @@ fn apply_layout_style(ctx: &egui::Context, text_scale: f32) {
             FontId::new(size(13.0), FontFamily::Monospace),
         );
 
-        style.spacing.item_spacing = egui::vec2(10.0, 8.0);
-        style.spacing.button_padding = egui::vec2(14.0, 9.0);
-        style.spacing.interact_size.y = 34.0;
-        style.spacing.indent = 22.0;
+        // Fluent's standard control is 32 tall with 11–12 of padding either side of its label.
+        style.spacing.item_spacing = egui::vec2(8.0, 8.0);
+        style.spacing.button_padding = egui::vec2(12.0, 6.0);
+        style.spacing.interact_size.y = crate::ui::controls::FIELD_HEIGHT;
+        style.spacing.indent = 20.0;
+        style.spacing.menu_margin = egui::Margin::same(4);
     });
 }
 
 /// Repaints egui's stock palette in Windows 11's own colours.
 ///
 /// Everything here is a plain colour/number swap the renderer already had to read anyway, so it
-/// costs exactly nothing per frame — no extra textures, shadows or passes.
+/// costs exactly nothing per frame — no extra textures or passes.
 pub fn tuned_visuals(is_light: bool) -> egui::Visuals {
     let mut v = if is_light {
         egui::Visuals::light()
@@ -1701,10 +1732,9 @@ pub fn tuned_visuals(is_light: bool) -> egui::Visuals {
     let text = win_text(is_light);
     let text_2 = win_text_secondary(is_light);
 
-    // The control radius. See [`crate::ui::controls::RADIUS_CONTROL`], which is where every other
-    // corner in the app is decided; this one has to be a literal because `Visuals` wants it before
-    // any of the drawing code exists.
-    let radius = egui::CornerRadius::same(7);
+    // Fluent's control corner. See [`crate::ui::controls::RADIUS_CONTROL`], which is where every
+    // other corner in the app is decided.
+    let radius = egui::CornerRadius::same(crate::ui::controls::RADIUS_CONTROL);
 
     v.widgets.noninteractive.bg_fill = win_card(is_light);
     v.widgets.noninteractive.weak_bg_fill = win_card(is_light);
@@ -1713,24 +1743,24 @@ pub fn tuned_visuals(is_light: bool) -> egui::Visuals {
 
     v.widgets.inactive.bg_fill = win_control(is_light);
     v.widgets.inactive.weak_bg_fill = win_control(is_light);
-    // Anything you can press or type in gets the stronger border: it marks the edge of a target,
-    // where a hairline only divides two things that are already separate.
+    // Anything you can press or type in gets the firmer border: it marks the edge of a target,
+    // where a divider only separates two things that are already apart.
     v.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, line_strong(is_light));
     v.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, text);
 
     v.widgets.hovered.bg_fill = win_control_hover(is_light);
     v.widgets.hovered.weak_bg_fill = win_control_hover(is_light);
-    v.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, stroke);
+    v.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, line_strong(is_light));
     v.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, text);
 
     v.widgets.active.bg_fill = win_control_active(is_light);
     v.widgets.active.weak_bg_fill = win_control_active(is_light);
-    v.widgets.active.bg_stroke = egui::Stroke::new(1.0, accent);
+    v.widgets.active.bg_stroke = egui::Stroke::new(1.0, stroke);
     v.widgets.active.fg_stroke = egui::Stroke::new(1.0, text);
 
     v.widgets.open.bg_fill = win_control_hover(is_light);
     v.widgets.open.weak_bg_fill = win_control_hover(is_light);
-    v.widgets.open.bg_stroke = egui::Stroke::new(1.0, stroke);
+    v.widgets.open.bg_stroke = egui::Stroke::new(1.0, line_strong(is_light));
     v.widgets.open.fg_stroke = egui::Stroke::new(1.0, text);
 
     for w in [
@@ -1744,50 +1774,77 @@ pub fn tuned_visuals(is_light: bool) -> egui::Visuals {
         w.expansion = 0.0;
     }
 
-    // egui draws a vertical rule down the left of anything indented. In a design whose whole point
-    // is removing strokes, that one puts a line beside every folder body. It lives in the visuals,
-    // so it has to be set here — anywhere else and the next theme change wipes it.
+    // egui draws a vertical rule down the left of anything indented; this design has no such line.
+    // It lives in the visuals, so it has to be set here — anywhere else the next theme change wipes
+    // it.
     v.indent_has_left_vline = false;
 
     v.panel_fill = win_background(is_light);
     v.window_fill = win_card(is_light);
     v.window_stroke = egui::Stroke::new(1.0, stroke);
-    // Text fields sit on the control colour rather than on pure white or near-black. With the boxes
-    // gone from the list, a search box that glowed brighter than everything around it was the
-    // loudest thing on the screen.
+    v.window_corner_radius = egui::CornerRadius::same(crate::ui::controls::RADIUS_DIALOG);
+    v.menu_corner_radius = egui::CornerRadius::same(crate::ui::controls::RADIUS_DIALOG);
+
+    // Shadows belong to what floats — a menu, a dialog, a tooltip — and to nothing else. Fluent's
+    // flyout shadow is soft and low; a contrast theme gets none, since it is not a colour it chose.
+    let shadow = |offset: i8, blur: u8| egui::Shadow {
+        offset: [0, offset],
+        blur,
+        spread: 0,
+        color: egui::Color32::from_black_alpha(if is_light { 36 } else { 100 }),
+    };
+    let (popup, window) = if contrast().is_some() {
+        (egui::Shadow::NONE, egui::Shadow::NONE)
+    } else {
+        (shadow(4, 16), shadow(12, 32))
+    };
+    v.popup_shadow = popup;
+    v.window_shadow = window;
+
     v.extreme_bg_color = win_control(is_light);
+    v.text_edit_bg_color = Some(win_control(is_light));
     v.faint_bg_color = win_card(is_light);
     v.override_text_color = Some(text);
     v.weak_text_color = Some(text_2);
 
-    v.selection.bg_fill = accent.gamma_multiply(if is_light { 0.28 } else { 0.38 });
-    v.selection.stroke = egui::Stroke::new(1.0, accent);
+    match contrast() {
+        Some(c) => {
+            v.selection.bg_fill = rgb(c.highlight);
+            v.selection.stroke = egui::Stroke::new(1.0, rgb(c.highlight_text));
+        }
+        None => {
+            v.selection.bg_fill = accent.gamma_multiply(if is_light { 0.28 } else { 0.38 });
+            v.selection.stroke = egui::Stroke::new(1.0, accent);
+        }
+    }
     v.hyperlink_color = accent;
 
     v
 }
 
-/// The line between two rows, and the outline of a card. The one line colour.
+/// The line between two rows, and the outline of a layer. The one divider colour.
 pub fn hairline(is_light: bool) -> egui::Color32 {
     win_stroke(is_light)
 }
 
-/// The border around something you can type in or press — a shade firmer than a hairline, because
-/// it marks the edge of a *target* rather than a division between two things already separate.
-/// Still derived from the same line colour, so it can never drift into being a second palette.
+/// The border round something you can type in or press — firmer than a divider, because it marks
+/// the edge of a *target* rather than a division between two things already separate.
 pub fn line_strong(is_light: bool) -> egui::Color32 {
-    mix(win_stroke(is_light), win_text(is_light), if is_light { 0.16 } else { 0.14 })
+    token(is_light, 0x454545, 0xD4D4D4, |c| c.button_text)
 }
 
-/// Kept as a name because several screens say "tertiary" where they mean "the quiet one". There is
-/// no third text colour in this design: this resolves to the same supporting grey as
-/// [`secondary_text`], which is what stops a screen ending up with four greys nobody chose.
+/// Previews, captions, key names: the quietest text there is, and still legible on the window.
 pub fn text_tertiary(is_light: bool) -> egui::Color32 {
-    win_text_secondary(is_light)
+    token(is_light, 0x9E9E9E, 0x707070, |c| c.text)
 }
 
 pub fn secondary_text(is_light: bool) -> egui::Color32 {
     win_text_secondary(is_light)
+}
+
+/// Text on something that cannot be used right now.
+pub fn disabled_text(is_light: bool) -> egui::Color32 {
+    token(is_light, 0x787878, 0xA0A0A0, |c| c.gray)
 }
 
 /// Applies a theme to *everything*, including the window's own title bar.
@@ -1801,6 +1858,8 @@ pub fn apply_theme(
     window: Option<&winit::window::Window>,
     is_light: bool,
 ) {
+    refresh_contrast();
+
     // egui does not keep *a* palette — it keeps two, one for light and one for dark, and swaps
     // between them by itself whenever the host reports that the system theme changed. Writing only
     // the currently active one therefore left the other as egui's stock palette, so a Windows theme
@@ -1813,6 +1872,8 @@ pub fn apply_theme(
 
     // And the choice between them is made here, not by egui: someone who pinned "Tema claro" has
     // to stay on light even while Windows is dark, which egui's own following would override.
+    // A contrast theme decides by itself: its window colour is what everything is drawn against.
+    let is_light = contrast_is_light().unwrap_or(is_light);
     ctx.set_theme(if is_light {
         egui::ThemePreference::Light
     } else {
@@ -1910,69 +1971,54 @@ pub fn readable_on(background: egui::Color32) -> egui::Color32 {
     }
 }
 
-/// What every tint is mixed *from*.
-///
-/// In light the window and a card are a hair apart, so it never mattered which one a tint started
-/// from. In dark they are far apart — the window is nearly black, the card is #242424 — and a tint
-/// mixed from the window came out *darker* than the card it is drawn on: a selected row read as a
-/// hole cut into the list instead of a highlight on it. Starting from the card keeps every tint
-/// above the surfaces it sits on, on the card and on the window alike.
+/// What every tint is mixed *from*: the window, which is what the list sits on.
 pub fn tint_base(is_light: bool) -> egui::Color32 {
-    if is_light {
-        win_background(is_light)
-    } else {
-        win_card(is_light)
-    }
+    win_background(is_light)
 }
 
-/// The tint a selected row sits on: the surface pulled towards the accent, far enough to be
-/// unmistakable and not so far that the trigger written in that same accent stops standing out.
-pub fn selection_tint(is_light: bool, accent: egui::Color32) -> egui::Color32 {
-    mix(
-        tint_base(is_light),
-        accent,
-        if is_light { 0.075 } else { 0.16 },
-    )
+/// The fill under a chosen row: Fluent's subtle fill, neutral rather than accented. The accent is
+/// carried by the short bar beside it instead, so a trigger written in that same accent keeps its
+/// contrast on the row. The `accent` argument stays for the callers that still pass it.
+pub fn selection_tint(is_light: bool, _accent: egui::Color32) -> egui::Color32 {
+    token(is_light, 0x2D2D2D, 0xEAEAEA, |c| c.window)
 }
 
-/// The faint wash under the row the pointer is over. Deliberately much weaker than the selection,
-/// so "where my mouse is" never competes with "what I have chosen".
+/// The wash under the row the pointer is over. Weaker than the selection, so "where my mouse is"
+/// never competes with "what I have chosen".
 pub fn hover_tint(is_light: bool) -> egui::Color32 {
-    mix(
-        tint_base(is_light),
-        win_text(is_light),
-        if is_light { 0.05 } else { 0.07 },
-    )
+    token(is_light, 0x292929, 0xEDEDED, |c| c.window)
 }
 
-/// A red that stays legible on either theme, and that is *muted* rather than fire-engine: it has to
-/// be able to sit inside a sentence without shouting over the words beside it.
+/// The chosen row while the pointer is over it too.
+pub fn selection_hover_tint(is_light: bool) -> egui::Color32 {
+    token(is_light, 0x323232, 0xE4E4E4, |c| c.window)
+}
+
+/// Fluent's critical colour: for errors and for what cannot be undone.
 pub fn danger(is_light: bool) -> egui::Color32 {
-    if is_light {
-        egui::Color32::from_rgb(0xB0, 0x29, 0x3B)
-    } else {
-        egui::Color32::from_rgb(0xFF, 0xB1, 0xB8)
-    }
+    token(is_light, 0xFF99A4, 0xC42B1C, |c| c.text)
 }
 
-/// An amber for "this will probably not do what you want" — louder than a hint, quieter than an
-/// error, because nothing here is wrong yet.
+/// Fluent's caution colour — louder than a hint, quieter than an error, because nothing is wrong
+/// yet. Used for "Pausado".
 pub fn caution(is_light: bool) -> egui::Color32 {
-    if is_light {
-        egui::Color32::from_rgb(0x85, 0x60, 0x14)
-    } else {
-        egui::Color32::from_rgb(0xED, 0xCC, 0x83)
-    }
+    token(is_light, 0xFCE100, 0x9D5D00, |c| c.text)
 }
 
-/// A green that means "running", and nothing else. The only place it appears is the live status
-/// beside the library's heading, which is why it is a colour and not a word in a box.
+/// Fluent's success colour. It means "running", and nothing else: the dot beside «Activo».
 pub fn success(is_light: bool) -> egui::Color32 {
-    if is_light {
-        egui::Color32::from_rgb(0x24, 0x6C, 0x47)
-    } else {
-        egui::Color32::from_rgb(0x96, 0xD5, 0xAC)
-    }
+    token(is_light, 0x6CCB5F, 0x0F7B0F, |c| c.text)
+}
+
+/// The InfoBar's fill when it only has news: Fluent's secondary card, a step off the page.
+fn infobar_info(is_light: bool) -> egui::Color32 {
+    token(is_light, 0x2D2D2D, 0xF6F6F6, |c| c.window)
+}
+
+/// The InfoBar's fill when something failed: Fluent's critical background, a tint and not a
+/// siren, so the words on it read as plainly as anywhere else.
+fn infobar_error(is_light: bool) -> egui::Color32 {
+    token(is_light, 0x442726, 0xFDE7E9, |c| c.window)
 }
 
 pub struct EspansoManagerApp {
@@ -2028,7 +2074,8 @@ pub struct StartupContext {
 
 impl EspansoManagerApp {
     pub fn new(cc: &eframe::CreationContext<'_>, mut ctx: StartupContext) -> Self {
-        let is_light = ctx.settings.theme_mode.is_light();
+        refresh_contrast();
+        let is_light = contrast_is_light().unwrap_or(ctx.settings.theme_mode.is_light());
         let window = cc.winit_window().cloned();
         let last_icon_dpi = window.as_deref().map_or(0, crate::icons::apply_window);
         // A size remembered on one machine travels with the folder to the next one, so a window
@@ -2529,8 +2576,12 @@ impl EspansoManagerApp {
         } else {
             self.is_light
         };
+        // A contrast theme switched on or off (or swapped for another) changes every colour at once,
+        // and says nothing about light or dark through the flag read above.
+        let contrast_changed = refresh_contrast();
+        let is_light = contrast_is_light().unwrap_or(is_light);
         let accent_now = read_system_accent(is_light);
-        if is_light != self.is_light || accent_now != self.last_accent {
+        if contrast_changed || is_light != self.is_light || accent_now != self.last_accent {
             self.is_light = is_light;
             self.last_accent = accent_now;
             apply_theme(ctx, self.window.as_deref(), is_light);
@@ -2539,19 +2590,26 @@ impl EspansoManagerApp {
 
     fn show_banner(&mut self, ui: &mut egui::Ui) {
         let t = self.state.t();
+        let is_light = self.is_light;
         let Some(banner) = &mut self.state.banner else {
             return;
         };
-        let (bg, fg) = match banner.kind {
-            BannerKind::Info => (egui::Color32::from_rgb(40, 90, 60), egui::Color32::WHITE),
-            BannerKind::Error => (egui::Color32::from_rgb(120, 40, 40), egui::Color32::WHITE),
+        // Windows' InfoBar: a quiet tint of the severity, the one line colour around it, and the
+        // severity said twice — by the icon's colour and by the icon's shape — never by colour
+        // alone. The words stay in the ordinary text colour, where they are easiest to read.
+        let (fill, glyph, ink) = match banner.kind {
+            BannerKind::Info => (infobar_info(is_light), ui::glyphs::Glyph::Info, accent(ui.visuals())),
+            BannerKind::Error => (infobar_error(is_light), ui::glyphs::Glyph::Error, danger(is_light)),
         };
         let mut close = false;
         let mut undo = false;
         egui::Frame::default()
-            .fill(bg)
-            .inner_margin(egui::Margin::same(10))
+            .fill(fill)
+            .stroke(egui::Stroke::new(1.0, hairline(is_light)))
+            .corner_radius(ui::controls::RADIUS_SECTION)
+            .inner_margin(egui::Margin { left: 14, right: 6, top: 6, bottom: 6 })
             .show(ui, |ui| {
+                ui.set_width(ui.available_width());
                 // The buttons take their place first, and the message fills what is left of the
                 // row, wrapping into as many lines as it needs.
                 //
@@ -2562,18 +2620,31 @@ impl EspansoManagerApp {
                 // reason something failed, usually with Windows' own words at the end of the
                 // sentence, which is exactly the part that went over the edge.
                 ui.horizontal_top(|ui| {
+                    let (slot, _) = ui.allocate_exact_size(
+                        egui::vec2(ui::glyphs::SIZE, ui::controls::FIELD_HEIGHT),
+                        egui::Sense::hover(),
+                    );
+                    ui::glyphs::paint(ui, slot, glyph, ui::glyphs::SIZE, ink);
+                    ui.add_space(ui::controls::GAP_WIDE - ui.spacing().item_spacing.x);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
-                        if ui.small_button(crate::fonts::icon("❌")).on_hover_text(t.banner_close_tip).clicked() {
+                        ui.spacing_mut().item_spacing.x = ui::controls::GAP_TIGHT;
+                        if ui::controls::icon_button(ui, ui::glyphs::Glyph::Close, t.banner_close_tip, true)
+                            .clicked()
+                        {
                             close = true;
                         }
-                        if banner.undo.is_some() && ui.small_button(t.undo).clicked() {
+                        if banner.undo.is_some()
+                            && ui::controls::subtle_button(ui, Some(ui::glyphs::Glyph::Undo), t.undo, None)
+                                .clicked()
+                        {
                             undo = true;
                         }
                         ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
-                            ui.add(
-                                egui::Label::new(egui::RichText::new(&banner.message).color(fg))
-                                    .wrap(),
-                            );
+                            // Centred on the buttons' line while it is one line; from the top once
+                            // it wraps, like the InfoBar's own message.
+                            let line = ui.text_style_height(&egui::TextStyle::Body);
+                            ui.add_space(((ui::controls::FIELD_HEIGHT - line) * 0.5).max(0.0));
+                            ui.add(egui::Label::new(&banner.message).wrap());
                         });
                     });
                 });
@@ -2613,7 +2684,8 @@ impl eframe::App for EspansoManagerApp {
             self.apply_language_change(ctx);
         }
         if std::mem::take(&mut self.state.pending_theme_refresh) {
-            self.is_light = self.state.settings.theme_mode.is_light();
+            refresh_contrast();
+            self.is_light = contrast_is_light().unwrap_or(self.state.settings.theme_mode.is_light());
             self.last_accent = read_system_accent(self.is_light);
             apply_theme(ctx, self.window.as_deref(), self.is_light);
         }
@@ -2623,21 +2695,22 @@ impl eframe::App for EspansoManagerApp {
 
         // The folder picker is a modal too, and it opens from Ajustes rather than from the list,
         // so its Esc cannot live inside the list-only block below.
-        if self.state.pending_transfer.is_some() && ctx.input(|i| i.key_pressed(egui::Key::Escape))
-        {
+        // Each Esc that closes a dialog is spent on it: left in the queue, the list would read it
+        // as well and close the inspector behind the dialog in the same keystroke.
+        let esc = |ctx: &egui::Context| {
+            ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        };
+        if self.state.pending_transfer.is_some() && esc(ctx) {
             self.state.cancel_pending_transfer();
         }
 
-        // Esc backs out of whatever is on top: a pending confirmation first, then a selection.
+        // Esc backs out of a pending confirmation. The rest of what Esc means on the list — the
+        // search, then the inspector, then the picking — is the list's own (`list_view::keyboard`),
+        // and in the editor it is Cancelar. The confirmation is drawn over every screen, so this is.
         // egui reports it as a physical key, so it works the same on a keyboard that prints "Esc",
-        // "Escape" or nothing at all. Deliberately limited to the list — in the editor it would
-        // throw away whatever the user had just typed.
-        if matches!(self.state.view, View::List) && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            if self.state.pending_confirm.is_some() {
-                self.state.cancel_pending_confirm();
-            } else {
-                self.state.clear_selection();
-            }
+        // "Escape" or nothing at all.
+        if self.state.pending_confirm.is_some() && esc(ctx) {
+            self.state.cancel_pending_confirm();
         }
 
         // The X hides to the tray rather than quitting — except when the tray's own Quit item is
@@ -2678,8 +2751,19 @@ impl eframe::App for EspansoManagerApp {
         // everything below it as it animates, so the banner appearing or disappearing never
         // overlaps the rest of the interface — it always pushes it, never covers it.
         if self.state.banner.is_some() {
+        let gutter = ui::controls::page_margin(ui.available_width());
         egui::Panel::top("banner")
             .show_separator_line(false)
+            .frame(
+                egui::Frame::default()
+                    .fill(win_background(self.is_light))
+                    .inner_margin(egui::Margin {
+                        left: gutter,
+                        right: gutter,
+                        top: gutter.saturating_sub(4),
+                        bottom: 0,
+                    }),
+            )
             .show(ui, |ui| {
                 self.show_banner(ui);
             });

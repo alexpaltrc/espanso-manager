@@ -171,7 +171,6 @@ pub fn fill(template: &str, args: &[(&str, &str)]) -> String {
 
 pub struct Strings {
     // --- main window ---------------------------------------------------------------------
-    pub app_title: &'static str,
     pub settings_button: &'static str,
     pub tips_button_tip: &'static str,
     pub tip_search_title: &'static str,
@@ -203,7 +202,6 @@ pub struct Strings {
     pub empty_title: &'static str,
     pub empty_hint: &'static str,
     pub no_matches: &'static str,
-    pub view_comfortable_tip: &'static str,
     pub view_compact_tip: &'static str,
     pub prefix_field_hint: &'static str,
     pub word_field_hint: &'static str,
@@ -211,7 +209,6 @@ pub struct Strings {
     pub made_by: &'static str,
     pub credits_espanso: &'static str,
     pub edit_button: &'static str,
-    pub edit_tip: &'static str,
     pub delete: &'static str,
     pub delete_tip: &'static str,
     pub cancel: &'static str,
@@ -230,8 +227,6 @@ pub struct Strings {
     // --- edit form -----------------------------------------------------------------------
     pub edit_title_new: &'static str,
     pub edit_title_existing: &'static str,
-    pub when_you_type: &'static str,
-    pub will_be_replaced_by: &'static str,
     pub kind_text: &'static str,
     pub kind_date: &'static str,
     pub preset_date_only: &'static str,
@@ -293,7 +288,6 @@ pub struct Strings {
     /// more than one folder to choose between, so none of these appear in the commonest case.
     pub transfer_pick_export_title: &'static str,
     pub transfer_pick_import_title: &'static str,
-    pub transfer_pick_hint: &'static str,
     pub transfer_pick_all: &'static str,
     pub transfer_pick_none: &'static str,
     pub transfer_pick_export_total: &'static str,
@@ -394,7 +388,6 @@ pub struct Strings {
 }
 
 pub static EN: Strings = Strings {
-    app_title: "My text expansions",
     settings_button: "Settings",
     tips_button_tip: "Tips",
     tip_search_title: "Find an expansion without leaving what you are doing",
@@ -426,7 +419,6 @@ pub static EN: Strings = Strings {
     empty_title: "You don't have any text expansions yet.",
     empty_hint: "Use the \"New expansion\" button above to create your first one.",
     no_matches: "No expansion matches your search.",
-    view_comfortable_tip: "Comfortable view",
     view_compact_tip: "Compact view",
     prefix_field_hint: "prefix",
     word_field_hint: "word",
@@ -434,7 +426,6 @@ pub static EN: Strings = Strings {
     made_by: "EspansoManager — made with AI by Alex Palacios",
     credits_espanso: "Built on Espanso, created by Federico Terzi and its contributors.",
     edit_button: "✏ Edit",
-    edit_tip: "Edit",
     delete: "Delete",
     delete_tip: "Delete",
     cancel: "Cancel",
@@ -451,8 +442,6 @@ pub static EN: Strings = Strings {
 
     edit_title_new: "New text expansion",
     edit_title_existing: "Edit text expansion",
-    when_you_type: "When you type this:",
-    will_be_replaced_by: "It will be replaced by:",
     kind_text: "Text",
     kind_date: "Current date or time",
     preset_date_only: "Date only (ISO 8601)",
@@ -511,7 +500,6 @@ pub static EN: Strings = Strings {
     import_error: "The file could not be read: {err}",
     transfer_pick_export_title: "Which folders do you want to export?",
     transfer_pick_import_title: "Which folders do you want to import?",
-    transfer_pick_hint: "Click a folder to include it or leave it out.",
     transfer_pick_all: "All",
     transfer_pick_none: "None",
     transfer_pick_export_total: "{n} expansion will be exported.|{n} expansions will be exported.",
@@ -597,7 +585,6 @@ pub static EN: Strings = Strings {
 };
 
 pub static ES: Strings = Strings {
-    app_title: "Mis expansiones de texto",
     settings_button: "Ajustes",
     tips_button_tip: "Consejos",
     tip_search_title: "Busca una expansión sin salir de lo que estás haciendo",
@@ -629,7 +616,6 @@ pub static ES: Strings = Strings {
     empty_title: "Aún no tienes ninguna expansión de texto.",
     empty_hint: "Usa el botón \"Nueva expansión\" de arriba para crear la primera.",
     no_matches: "Ninguna expansión coincide con tu búsqueda.",
-    view_comfortable_tip: "Vista predeterminada",
     view_compact_tip: "Vista compacta",
     prefix_field_hint: "prefijo",
     word_field_hint: "palabra",
@@ -637,7 +623,6 @@ pub static ES: Strings = Strings {
     made_by: "EspansoManager — hecho con IA por Alex Palacios",
     credits_espanso: "Construido sobre Espanso, creado por Federico Terzi y sus colaboradores.",
     edit_button: "✏ Editar",
-    edit_tip: "Editar",
     delete: "Eliminar",
     delete_tip: "Eliminar",
     cancel: "Cancelar",
@@ -654,8 +639,6 @@ pub static ES: Strings = Strings {
 
     edit_title_new: "Nueva expansión de texto",
     edit_title_existing: "Editar expansión de texto",
-    when_you_type: "Cuando escribas esto:",
-    will_be_replaced_by: "Se reemplazará por:",
     kind_text: "Texto",
     kind_date: "Fecha u hora actual",
     preset_date_only: "Solo la fecha (ISO 8601)",
@@ -714,7 +697,6 @@ pub static ES: Strings = Strings {
     import_error: "No se pudo leer el archivo: {err}",
     transfer_pick_export_title: "¿Qué carpetas quieres exportar?",
     transfer_pick_import_title: "¿Qué carpetas quieres importar?",
-    transfer_pick_hint: "Toca una carpeta para incluirla o dejarla fuera.",
     transfer_pick_all: "Todas",
     transfer_pick_none: "Ninguna",
     transfer_pick_export_total: "Se exportará {n} expansión.|Se exportarán {n} expansiones.",
@@ -800,7 +782,6 @@ pub static ES: Strings = Strings {
 };
 
 pub static FIL: Strings = Strings {
-    app_title: "Aking mga text expansion",
     settings_button: "Mga setting",
     tips_button_tip: "Mga tip",
     tip_search_title: "Maghanap ng expansion nang hindi umaalis sa ginagawa mo",
@@ -832,7 +813,6 @@ pub static FIL: Strings = Strings {
     empty_title: "Wala ka pang anumang text expansion.",
     empty_hint: "Gamitin ang butones na \"Bagong expansion\" sa itaas para gumawa ng una mo.",
     no_matches: "Walang expansion na tumutugma sa iyong paghahanap.",
-    view_comfortable_tip: "Karaniwang view",
     view_compact_tip: "Compact na view",
     prefix_field_hint: "prefix",
     word_field_hint: "salita",
@@ -840,7 +820,6 @@ pub static FIL: Strings = Strings {
     made_by: "EspansoManager — ginawa gamit ang AI ni Alex Palacios",
     credits_espanso: "Nakabatay sa Espanso, na nilikha ni Federico Terzi at ng mga kontribyutor nito.",
     edit_button: "✏ I-edit",
-    edit_tip: "I-edit",
     delete: "Burahin",
     delete_tip: "Burahin",
     cancel: "Kanselahin",
@@ -857,8 +836,6 @@ pub static FIL: Strings = Strings {
 
     edit_title_new: "Bagong text expansion",
     edit_title_existing: "I-edit ang text expansion",
-    when_you_type: "Kapag i-type mo ito:",
-    will_be_replaced_by: "Papalitan ito ng:",
     kind_text: "Teksto",
     kind_date: "Kasalukuyang petsa o oras",
     preset_date_only: "Petsa lamang (ISO 8601)",
@@ -917,7 +894,6 @@ pub static FIL: Strings = Strings {
     import_error: "Hindi mabasa ang file: {err}",
     transfer_pick_export_title: "Aling mga folder ang gusto mong i-export?",
     transfer_pick_import_title: "Aling mga folder ang gusto mong i-import?",
-    transfer_pick_hint: "Pindutin ang isang folder para isama o iwanan.",
     transfer_pick_all: "Lahat",
     transfer_pick_none: "Wala",
     transfer_pick_export_total: "{n} expansion ang i-export.|{n} expansion ang i-export.",
@@ -1003,7 +979,6 @@ pub static FIL: Strings = Strings {
 };
 
 pub static HI: Strings = Strings {
-    app_title: "मेरे टेक्स्ट विस्तार",
     settings_button: "सेटिंग्स",
     tips_button_tip: "सुझाव",
     tip_search_title: "जो कर रहे हैं उसे छोड़े बिना कोई एक्सपैंशन ढूँढें",
@@ -1035,7 +1010,6 @@ pub static HI: Strings = Strings {
     empty_title: "आपके पास अभी कोई टेक्स्ट विस्तार नहीं है।",
     empty_hint: "पहला बनाने के लिए ऊपर दिए \"नया विस्तार\" बटन का उपयोग करें।",
     no_matches: "आपकी खोज से कोई विस्तार मेल नहीं खाता।",
-    view_comfortable_tip: "सामान्य दृश्य",
     view_compact_tip: "संक्षिप्त दृश्य",
     prefix_field_hint: "उपसर्ग",
     word_field_hint: "शब्द",
@@ -1043,7 +1017,6 @@ pub static HI: Strings = Strings {
     made_by: "EspansoManager — Alex Palacios द्वारा AI से बनाया गया।",
     credits_espanso: "Espanso पर आधारित, जिसे Federico Terzi और उनके योगदानकर्ताओं ने बनाया है।",
     edit_button: "✏ संपादित करें",
-    edit_tip: "संपादित करें",
     delete: "हटाएँ",
     delete_tip: "हटाएँ",
     cancel: "रद्द करें",
@@ -1060,8 +1033,6 @@ pub static HI: Strings = Strings {
 
     edit_title_new: "नया टेक्स्ट विस्तार",
     edit_title_existing: "टेक्स्ट विस्तार संपादित करें",
-    when_you_type: "जब आप यह टाइप करें:",
-    will_be_replaced_by: "इसे इससे बदला जाएगा:",
     kind_text: "टेक्स्ट",
     kind_date: "वर्तमान दिनांक या समय",
     preset_date_only: "केवल दिनांक (ISO 8601)",
@@ -1120,7 +1091,6 @@ pub static HI: Strings = Strings {
     import_error: "फ़ाइल नहीं पढ़ी जा सकी: {err}",
     transfer_pick_export_title: "आप कौन-से फ़ोल्डर निर्यात करना चाहते हैं?",
     transfer_pick_import_title: "आप कौन-से फ़ोल्डर आयात करना चाहते हैं?",
-    transfer_pick_hint: "शामिल करने या छोड़ने के लिए फ़ोल्डर पर क्लिक करें।",
     transfer_pick_all: "सभी",
     transfer_pick_none: "कोई नहीं",
     transfer_pick_export_total: "{n} विस्तार निर्यात किया जाएगा।|{n} विस्तार निर्यात किए जाएँगे।",
