@@ -43,6 +43,8 @@ When it is, this heading becomes `## 0.0.2 — <date>` and the `-dev` comes off 
   - Keyboard: Ctrl+N new, Ctrl+L or Ctrl+F search, arrows and Enter in the list, F2 folder
     options, Del delete (always asked), Ctrl+S save, Esc backs out one layer at a time. None of
     them act while text is being typed. Shortcuts are shown in tooltips, menus and the guide.
+  - The status dot sits at the middle of its word, not level with the top of the capitals. The
+    start-up switch reads **Start EspansoManager with Windows**, without "(and Espanso)".
 - **A new interface, from the library to the last dialog** (2026-09-22). One central library
   with nothing permanently docked beside it:
   - The title shows what Espanso really answered, not what the app assumes. The pill reads

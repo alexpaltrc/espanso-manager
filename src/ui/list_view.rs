@@ -602,6 +602,9 @@ fn status_width(ui: &egui::Ui, state: &AppState, is_light: bool) -> f32 {
     STATUS_DOT + controls::GAP + galley.size().x
 }
 
+/// Segoe UI's capitals stand this fraction of the font size above the baseline.
+const CAP_HEIGHT: f32 = 0.7;
+
 fn status(ui: &mut egui::Ui, state: &AppState, is_light: bool) {
     let (colour, word, filled) = status_parts(state, is_light);
     let galley = ui.painter().layout_no_wrap(
@@ -611,14 +614,19 @@ fn status(ui: &mut egui::Ui, state: &AppState, is_light: bool) {
     );
     let size = egui::vec2(STATUS_DOT + controls::GAP + galley.size().x, controls::FIELD_HEIGHT);
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
-    let centre = egui::pos2(rect.left() + STATUS_DOT * 0.5, rect.center().y);
+    let top = rect.center().y - galley.size().y * 0.5;
+    // Centred on the letters, not on the line box: the box keeps room for descenders and line
+    // spacing, so its middle sits above the word and a dot there looks pinned to the top. The
+    // letters' own middle is halfway between the baseline and the top of the capitals.
+    let font_size = egui::TextStyle::Body.resolve(ui.style()).size;
+    let letters_middle = top + controls::baseline(&galley) - font_size * CAP_HEIGHT * 0.5;
+    let centre = egui::pos2(rect.left() + STATUS_DOT * 0.5, letters_middle);
     if filled {
         ui.painter().circle_filled(centre, STATUS_DOT * 0.5, colour);
     } else {
         ui.painter()
             .circle_stroke(centre, STATUS_DOT * 0.5 - 0.75, egui::Stroke::new(1.5, colour));
     }
-    let top = rect.center().y - galley.size().y * 0.5;
     ui.painter().galley(
         egui::pos2(rect.left() + STATUS_DOT + controls::GAP, top),
         galley,
