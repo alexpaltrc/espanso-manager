@@ -66,17 +66,16 @@ second program to go and fetch, and nothing to install — one ZIP, unzip it, op
 | 🎨 | Look like Windows 11: its own light and dark colours, your accent colour, contrast themes, and Windows' animation switch. |
 | 📅 | Insert today's date in the format you like, without learning any syntax. |
 | 🔔 | Live quietly in the tray, and start with Windows if you want it to. |
-| 🪶 | Stay small while it waits there: about 80 MB of memory, and a tenth of one percent of one CPU core. |
+| 🪶 | Stay small while it waits there: about 105 MB of memory, and a few hundredths of one percent of one CPU core. |
 | 📤 | Export the folders you choose and send them to a colleague. |
 | 🌍 | Speak English, Spanish, Filipino or Hindi. |
 | 💾 | Keep a backup of every save, in case you change your mind. |
 
-There is more than this in there. It is meant to be found by using it.
-
-> 📏 Those two numbers are measured, not estimated, on version 0.0.1: 79.9 MB of working set,
-> and 125–156 ms of CPU per 150 seconds across three consecutive samples with the app hidden in
-> the tray, handle count flat at 333 throughout. Taken on the author's machine, so yours will read differently —
-> but idle is meant to cost nothing, and it is checked rather than assumed.
+There is more than this in there. It is meant to be found by u> 📏 Those two numbers are measured, not estimated, on version 0.0.2 with the app hidden in the
+> tray: 103.6–104.8 MB of working set, and 16–62 ms of CPU per 150 seconds in five of six
+> consecutive samples, handle count steady at 367–368. The sixth sample read 2.5 s, did not
+> repeat, and was not explained. Taken on the author's machine, so yours will read differently —
+> but idle is meant to cost nothing, and it is checked rather than assumed.n assumed.
 
 ---
 
