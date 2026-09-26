@@ -306,7 +306,7 @@ pub fn tag_frame(is_light: bool) -> egui::Frame {
 // --- Dialogs ----------------------------------------------------------------------------------
 
 /// How much room a dialog keeps from the window's edges on each side, frame included.
-const DIALOG_CLEARANCE: f32 = 36.0;
+pub const DIALOG_CLEARANCE: f32 = 36.0;
 
 /// Every in-app dialog: the card surface and hairline the screens use, the page gutter as padding.
 ///

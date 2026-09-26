@@ -25,6 +25,14 @@ When it is, this heading becomes `## 0.0.2 — <date>` and the `-dev` comes off 
 
 ### Changed
 
+- **Settings is a dialog now** (2026-09-25). It opens in the middle of the window over the dimmed
+  list and cannot be moved; Esc, the cross or a click outside it closes it. It names its five
+  settings and nothing else: the sentence under each one moved to the guide, under a new
+  **Settings** topic, and so did the credit to Espanso's author. The export and import folder
+  picker opens on top of it, and what those actions report is shown inside the dialog. Turning
+  start-with-Windows on or off no longer posts a banner (the switch already says so); a failure
+  still does. On a short window the dialog scrolls under a fixed title, and it always opens at
+  the top.
 - **A quieter interface, with the detail beside the list** (2026-09-25). This supersedes parts of
   the 2026-09-22 interface described in the next entry:
   - The library title is centred, with the real state of Espanso (a dot and **Active**,

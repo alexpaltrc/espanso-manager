@@ -113,7 +113,6 @@ pub fn truncate(s: &str, max_chars: usize) -> String {
 pub enum View {
     List,
     Edit(EditState),
-    Settings,
     Tips,
     Onboarding,
     /// Everything that can be done *to* a folder rather than inside it: rename, change the prefix
@@ -339,6 +338,12 @@ pub struct AppState {
     pub settings_store: SettingsStore,
     pub ctl: EspansoCtl,
     pub view: View,
+    /// Ajustes is a dialog over whatever screen is behind it, not a screen of its own. See
+    /// [`crate::ui::settings_view`].
+    pub settings_open: bool,
+    /// What was said while Ajustes was open. It is shown inside the dialog, because the banner
+    /// behind it is under the dimmed backdrop, and it is dropped when the dialog closes.
+    pub settings_note: Option<Banner>,
     pub search: String,
     pub banner: Option<Banner>,
     /// Why the expansions file could not be read, if it could not. Saving is refused while this
@@ -434,19 +439,37 @@ pub struct AppState {
 
 impl AppState {
     pub fn set_info_banner(&mut self, message: impl Into<String>) {
-        self.banner = Some(Banner {
-            kind: BannerKind::Info,
-            message: message.into(),
-            undo: None,
-        });
+        self.post(BannerKind::Info, message.into());
     }
 
     pub fn set_error_banner(&mut self, message: impl Into<String>) {
-        self.banner = Some(Banner {
-            kind: BannerKind::Error,
-            message: message.into(),
-            undo: None,
-        });
+        self.post(BannerKind::Error, message.into());
+    }
+
+    /// Where a message goes: the banner, or the dialog in front of it while Ajustes is open.
+    fn post(&mut self, kind: BannerKind, message: String) {
+        let banner = Some(Banner { kind, message, undo: None });
+        if self.settings_open {
+            self.settings_note = banner;
+        } else {
+            self.banner = banner;
+        }
+    }
+
+    /// Opens Ajustes over the current screen. The one way in.
+    ///
+    /// Blocking here is fine: the user has just asked for the dialog, and the switch has to say what
+    /// Windows will really do at the next start, not what it said when the app was launched.
+    pub fn open_settings(&mut self) {
+        self.refresh_autostart_cache();
+        self.ensure_espanso_version();
+        self.settings_note = None;
+        self.settings_open = true;
+    }
+
+    pub fn close_settings(&mut self) {
+        self.settings_open = false;
+        self.settings_note = None;
     }
 
     /// The scratch file holding the one expansion the first-run screen demonstrates.
@@ -511,7 +534,7 @@ impl AppState {
     /// Asks espanso its version, once, on the way into the screen that shows it.
     ///
     /// Blocking here is fine in a way it was not at startup: the user has just clicked Ajustes and
-    /// the window is up and drawn. Called from the one place `View::Settings` is entered.
+    /// the window is up and drawn. Called from [`AppState::open_settings`].
     pub fn ensure_espanso_version(&mut self) {
         if self.espanso_version_asked {
             return;
@@ -621,12 +644,10 @@ impl AppState {
                 // separate veto over start-up entries, and if clearing it did not take, the entry
                 // is written and still dead — better a switch that stays where the machine has it
                 // than one that says yes on top of a no.
+                //
+                // Nothing is announced: the switch, drawn from that read-back, is the answer. A
+                // sentence repeating it under the switch was one more thing to read for nothing.
                 self.refresh_autostart_cache();
-                if self.autostart_enabled {
-                    self.set_info_banner(t.autostart_on);
-                } else {
-                    self.set_info_banner(t.autostart_off);
-                }
             }
             Err(e) => {
                 self.refresh_autostart_cache();
@@ -2187,6 +2208,8 @@ impl EspansoManagerApp {
             settings_store: ctx.settings_store,
             ctl: ctx.ctl,
             view: View::List,
+            settings_open: false,
+            settings_note: None,
             search: String::new(),
             banner: None,
             load_error: ctx.load_error,
@@ -2613,71 +2636,79 @@ impl EspansoManagerApp {
 
     fn show_banner(&mut self, ui: &mut egui::Ui) {
         let t = self.state.t();
-        let is_light = self.is_light;
-        let Some(banner) = &mut self.state.banner else {
+        let Some(banner) = &self.state.banner else {
             return;
         };
-        // Windows' InfoBar: a quiet tint of the severity, the one line colour around it, and the
-        // severity said twice — by the icon's colour and by the icon's shape — never by colour
-        // alone. The words stay in the ordinary text colour, where they are easiest to read.
-        let (fill, glyph, ink) = match banner.kind {
-            BannerKind::Info => (infobar_info(is_light), ui::glyphs::Glyph::Info, accent(ui.visuals())),
-            BannerKind::Error => (infobar_error(is_light), ui::glyphs::Glyph::Error, danger(is_light)),
-        };
-        let mut close = false;
-        let mut undo = false;
-        egui::Frame::default()
-            .fill(fill)
-            .stroke(egui::Stroke::new(1.0, hairline(is_light)))
-            .corner_radius(ui::controls::RADIUS_SECTION)
-            .inner_margin(egui::Margin { left: 14, right: 6, top: 6, bottom: 6 })
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                // The buttons take their place first, and the message fills what is left of the
-                // row, wrapping into as many lines as it needs.
-                //
-                // The obvious order was what stood here -- message, then buttons pushed to the
-                // right -- and it cut long messages off at the window edge without a mark: a
-                // label laid out along a horizontal row is offered unlimited width, so it never
-                // wraps, and the frame just clips whatever overruns. These messages carry the
-                // reason something failed, usually with Windows' own words at the end of the
-                // sentence, which is exactly the part that went over the edge.
-                ui.horizontal_top(|ui| {
-                    let (slot, _) = ui.allocate_exact_size(
-                        egui::vec2(ui::glyphs::SIZE, ui::controls::FIELD_HEIGHT),
-                        egui::Sense::hover(),
-                    );
-                    ui::glyphs::paint(ui, slot, glyph, ui::glyphs::SIZE, ink);
-                    ui.add_space(ui::controls::GAP_WIDE - ui.spacing().item_spacing.x);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
-                        ui.spacing_mut().item_spacing.x = ui::controls::GAP_TIGHT;
-                        if ui::controls::icon_button(ui, ui::glyphs::Glyph::Close, t.banner_close_tip, true)
-                            .clicked()
-                        {
-                            close = true;
-                        }
-                        if banner.undo.is_some()
-                            && ui::controls::subtle_button(ui, Some(ui::glyphs::Glyph::Undo), t.undo, None)
-                                .clicked()
-                        {
-                            undo = true;
-                        }
-                        ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
-                            // Centred on the buttons' line while it is one line; from the top once
-                            // it wraps, like the InfoBar's own message.
-                            let line = ui.text_style_height(&egui::TextStyle::Body);
-                            ui.add_space(((ui::controls::FIELD_HEIGHT - line) * 0.5).max(0.0));
-                            ui.add(egui::Label::new(&banner.message).wrap());
-                        });
-                    });
-                });
-            });
+        let (close, undo) = infobar(ui, banner, t);
         if undo {
             self.state.undo_from_banner();
         } else if close {
             self.state.banner = None;
         }
     }
+}
+
+/// One message in Windows' InfoBar, the full width of `ui`. Returns (closed, undo pressed).
+///
+/// Drawn at the top of the window, and inside Ajustes for what is said while it is open.
+pub fn infobar(ui: &mut egui::Ui, banner: &Banner, t: &Strings) -> (bool, bool) {
+    let is_light = !ui.visuals().dark_mode;
+    // Windows' InfoBar: a quiet tint of the severity, the one line colour around it, and the
+    // severity said twice — by the icon's colour and by the icon's shape — never by colour
+    // alone. The words stay in the ordinary text colour, where they are easiest to read.
+    let (fill, glyph, ink) = match banner.kind {
+        BannerKind::Info => (infobar_info(is_light), ui::glyphs::Glyph::Info, accent(ui.visuals())),
+        BannerKind::Error => (infobar_error(is_light), ui::glyphs::Glyph::Error, danger(is_light)),
+    };
+    let mut close = false;
+    let mut undo = false;
+    egui::Frame::default()
+        .fill(fill)
+        .stroke(egui::Stroke::new(1.0, hairline(is_light)))
+        .corner_radius(ui::controls::RADIUS_SECTION)
+        .inner_margin(egui::Margin { left: 14, right: 6, top: 6, bottom: 6 })
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            // The buttons take their place first, and the message fills what is left of the
+            // row, wrapping into as many lines as it needs.
+            //
+            // The obvious order was what stood here -- message, then buttons pushed to the
+            // right -- and it cut long messages off at the window edge without a mark: a
+            // label laid out along a horizontal row is offered unlimited width, so it never
+            // wraps, and the frame just clips whatever overruns. These messages carry the
+            // reason something failed, usually with Windows' own words at the end of the
+            // sentence, which is exactly the part that went over the edge.
+            ui.horizontal_top(|ui| {
+                let (slot, _) = ui.allocate_exact_size(
+                    egui::vec2(ui::glyphs::SIZE, ui::controls::FIELD_HEIGHT),
+                    egui::Sense::hover(),
+                );
+                ui::glyphs::paint(ui, slot, glyph, ui::glyphs::SIZE, ink);
+                ui.add_space(ui::controls::GAP_WIDE - ui.spacing().item_spacing.x);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
+                    ui.spacing_mut().item_spacing.x = ui::controls::GAP_TIGHT;
+                    if ui::controls::icon_button(ui, ui::glyphs::Glyph::Close, t.banner_close_tip, true)
+                        .clicked()
+                    {
+                        close = true;
+                    }
+                    if banner.undo.is_some()
+                        && ui::controls::subtle_button(ui, Some(ui::glyphs::Glyph::Undo), t.undo, None)
+                            .clicked()
+                    {
+                        undo = true;
+                    }
+                    ui.with_layout(egui::Layout::top_down(egui::Align::LEFT), |ui| {
+                        // Centred on the buttons' line while it is one line; from the top once
+                        // it wraps, like the InfoBar's own message.
+                        let line = ui.text_style_height(&egui::TextStyle::Body);
+                        ui.add_space(((ui::controls::FIELD_HEIGHT - line) * 0.5).max(0.0));
+                        ui.add(egui::Label::new(&banner.message).wrap());
+                    });
+                });
+            });
+        });
+    (close, undo)
 }
 
 impl eframe::App for EspansoManagerApp {
@@ -2734,6 +2765,10 @@ impl eframe::App for EspansoManagerApp {
         // "Escape" or nothing at all.
         if self.state.pending_confirm.is_some() && esc(ctx) {
             self.state.cancel_pending_confirm();
+        }
+        // Ajustes last: the picker it opens sits in front of it and has already had its Esc.
+        if self.state.settings_open && esc(ctx) {
+            self.state.close_settings();
         }
 
         // The X hides to the tray rather than quitting — except when the tray's own Quit item is
@@ -2809,7 +2844,6 @@ impl eframe::App for EspansoManagerApp {
             .show(ui, |ui| match &self.state.view {
             View::List => ui::list_view::show(ui, &mut self.state),
             View::Edit(_) => ui::edit_form::show(ui, &mut self.state),
-            View::Settings => ui::settings_view::show(ui, &mut self.state),
             View::Tips => ui::tips_view::show(ui, &mut self.state),
             View::Onboarding => ui::onboarding_view::show(ui, &mut self.state),
             View::FolderOptions(_) => ui::folder_view::show(ui, &mut self.state),
@@ -2818,6 +2852,8 @@ impl eframe::App for EspansoManagerApp {
         ui::list_view::show_move_modal(ui.ctx(), &mut self.state);
         ui::list_view::show_create_folder_modal(ui.ctx(), &mut self.state);
         ui::list_view::show_pending_confirm(ui.ctx(), &mut self.state);
+        // Before the folder picker, which opens from it and has to be the one on top.
+        ui::settings_view::show(ui.ctx(), &mut self.state);
         ui::settings_view::show_folder_picker(ui.ctx(), &mut self.state);
         ui::glide::end_frame(ui.ctx());
 

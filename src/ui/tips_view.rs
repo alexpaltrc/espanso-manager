@@ -118,6 +118,10 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
             lead(ui, state);
             ui.add_space(28.0);
             tasks(ui, state);
+            // Where the work underneath comes from, once, at the end of the page that explains it.
+            ui.add_space(28.0);
+            let is_light = !ui.visuals().dark_mode;
+            ui.add(egui::Label::new(controls::small_muted(t.credits_espanso, is_light)).wrap());
             // The window's own gutter is drawn around the scroll area, not inside it.
             ui.add_space(controls::GAP_STACK);
         });
@@ -279,6 +283,17 @@ fn tasks(ui: &mut egui::Ui, state: &AppState) {
             text(state, "Importar y exportar", "Import and export", "Mag-import at mag-export", "आयात और निर्यात"),
             |ui| para(ui, &share_body),
         );
+
+        // What each setting does. The dialog itself names them and says nothing more; the sentence
+        // that used to sit under each control is here, under the same name and in the same order,
+        // for whoever asks.
+        topic(ui, false, t.settings_title, |ui| {
+            part(ui, t.autostart_checkbox, t.autostart_hint);
+            part(ui, t.appearance_section, t.theme_hint);
+            part(ui, t.language_section, t.language_hint);
+            part(ui, t.prefix_section, t.prefix_hint);
+            part(ui, t.apply_prefix, t.apply_prefix_hint);
+        });
 
         let pause_body = crate::i18n::fill(
             text(

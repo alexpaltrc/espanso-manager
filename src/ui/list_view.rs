@@ -842,6 +842,7 @@ fn commands(ui: &mut egui::Ui, state: &mut AppState) {
     let mut toggle_picking = false;
     let mut toggle_compact = false;
     let mut go: Option<View> = None;
+    let mut settings = false;
     menu(&more, MENU_WIDTH, |ui| {
         let label = if picking {
             studio::text(state, "Terminar selección", "Stop selecting", "Tapusin ang pagpili", "चयन समाप्त करें")
@@ -863,7 +864,7 @@ fn commands(ui: &mut egui::Ui, state: &mut AppState) {
         if controls::menu_item(ui, Some(Glyph::Settings), t.settings_button, None, Tone::Normal, true)
             .clicked()
         {
-            go = Some(View::Settings);
+            settings = true;
         }
     });
     if toggle_picking {
@@ -877,11 +878,10 @@ fn commands(ui: &mut egui::Ui, state: &mut AppState) {
         state.set_compact_view(!compact);
     }
     if let Some(view) = go {
-        if matches!(view, View::Settings) {
-            state.refresh_autostart_cache();
-            state.ensure_espanso_version();
-        }
         state.view = view;
+    }
+    if settings {
+        state.open_settings();
     }
 }
 
@@ -1297,7 +1297,7 @@ fn keyboard(
     popup_was_open: bool,
 ) {
     let ctx = ui.ctx().clone();
-    if state.pending_confirm.is_some() || state.pending_transfer.is_some() {
+    if state.pending_confirm.is_some() || state.pending_transfer.is_some() || state.settings_open {
         return;
     }
     if ctx.data(|d| d.get_temp::<Vec<String>>(move_targets_key()).is_some())

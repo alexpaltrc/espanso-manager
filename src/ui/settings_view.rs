@@ -17,147 +17,158 @@
  * along with EspansoManager.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-//! The Ajustes screen: prefix, language, theme, start-with-Windows, import and export.
+
+//! Ajustes: a dialog in the middle of the window, over the dimmed screen behind it. It is not a
+//! screen, and it cannot be moved.
 //!
-//! **Four groups and no more**, in the plan's order: when Windows starts, appearance and language,
-//! sharing, and the prefix. The count is the design, not an accident of what happens to be
-//! configurable — an app that grows a setting for every aesthetic decision ends up asking the user
-//! to design it, which is the job this screen exists to have already done.
+//! **Five settings and no explanations.** Start with Windows, theme, language, prefix, export and
+//! import, each under its name and nothing else. The sentence that used to sit under each one
+//! lives in the guide now (Consejos → Ajustes), which is where someone goes when they want to
+//! know. A dialog that explains every control ends up as a page, which is what this stopped being.
 //!
 //! Everything on it is a call into `AppState`, which is what saves and reports; nothing is written
-//! from here. `show` is also where `ensure_espanso_version` is asked, because the espanso version
-//! is shown on this screen and nowhere else — asking for it at start-up cost a blocking call
-//! before the first frame for a line most people never look at.
+//! from here. What `AppState` says while the dialog is open comes back as
+//! [`AppState::settings_note`] and is shown inside it, because the banner is under the backdrop.
+//!
+//! It closes with Esc (handled in `App::logic`, after the folder picker it opens), with the cross,
+//! or with a click on the dimmed window.
 
-use crate::app::{text_tertiary, AppState, TransferDirection, View};
+use crate::app::{text_tertiary, AppState, TransferDirection};
 use crate::i18n::{fill_count, Lang};
 use crate::settings::PREFIX_SUGGESTIONS;
 use crate::theme::ThemeMode;
 use crate::ui::controls::{self, Tone};
-use crate::ui::studio;
+use crate::ui::glyphs::Glyph;
+use crate::ui::keys;
 
-pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
-    let t = state.t();
-    // Fixed above the scroll area: this screen is taller than the window, and the way back has to
-    // be one step from anywhere in it. See [`controls::page_header`].
-    if controls::page_header(ui, t.back, t.settings_title, state.settings.lang) {
-        state.view = View::List;
+/// The widest the dialog's contents get. Enough for the language row and the prefix row on one
+/// line each; less on a small window, through [`controls::dialog_width`].
+const WIDEST: f32 = 440.0;
+
+/// Between two settings. The dialog has no headings above its groups, so this space is the only
+/// thing that separates them; it is wider than anything inside a group.
+const GROUP_GAP: f32 = 20.0;
+
+pub fn show(ctx: &egui::Context, state: &mut AppState) {
+    if !state.settings_open {
+        // However it was closed, a half-typed prefix is not kept for next time: the field starts
+        // again from the saved one.
+        ctx.data_mut(|d| {
+            d.remove::<String>(custom_prefix_id());
+            d.insert_temp(fresh_id(), true);
+        });
+        return;
     }
+    // Opened at the top every time. egui keeps a scroll position across frames and across runs,
+    // and a dialog that opens half way down its own contents hides the first thing it offers.
+    // Only the first frame finds the flag; every later one must leave the scroll to the wheel.
+    let fresh = ctx.data_mut(|d| d.remove_temp::<bool>(fresh_id())).unwrap_or(false);
+    let t = state.t();
+    let lang = state.settings.lang;
+    let mut close = false;
 
-    // Everything below scrolls, so shrinking the window never hides a setting.
-    crate::ui::controls::page_scroll(ui, "settings", |ui| show_sections(ui, state));
+    let modal = controls::dialog(ctx, "settings").show(ctx, |ui| {
+        ui.set_width(controls::dialog_width(ctx, WIDEST));
+        // Everything under the title scrolls, so the smallest window still reaches every setting
+        // and the dialog never runs past the window's edge. The title and the cross stay put.
+        //
+        // The room is set outright, before anything is laid out. A modal's area offers its contents
+        // last frame's size, so a scroll area left to measure what is available never grows past
+        // the height it opened at.
+        let frame = 2.0 * f32::from(controls::PAGE_MARGIN);
+        let room = (ctx.content_rect().height() - frame - 2.0 * controls::DIALOG_CLEARANCE).max(160.0);
+        ui.set_max_height(room);
+
+        ui.horizontal(|ui| {
+            ui.label(controls::h3(t.settings_title));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let tip = keys::tip(t.banner_close_tip, keys::BACK, lang);
+                if controls::icon_button(ui, Glyph::Close, &tip, true).clicked() {
+                    close = true;
+                }
+            });
+        });
+        ui.add_space(controls::GAP_WIDE);
+
+        // A bar that takes its own column, and only when the window is too short to need none:
+        // floating over the contents, it sat on top of the start-up switch at the right edge.
+        ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
+        let mut scroll = egui::ScrollArea::vertical()
+            .id_salt("settings")
+            .max_height(room - TITLE_ROW)
+            .auto_shrink([false, true]);
+        if fresh {
+            scroll = scroll.vertical_scroll_offset(0.0);
+        }
+        scroll.show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            sections(ui, state);
+        });
+    });
+
+    if close || modal.backdrop_response.clicked() {
+        state.close_settings();
+    }
 }
 
-/// One group of settings: its name, then what it sets, straight on the window — the way the editor
-/// lays out its three parts.
-///
-/// This screen has been a stack of cards, then flat, then cards again. It is flat now because every
-/// screen is: with a card around each group, the frames were the loudest thing on a page whose
-/// whole content is four quiet choices. The space between groups, wider than any space inside one,
-/// is what still makes a group read as a group.
-fn section(ui: &mut egui::Ui, title: &str, contents: impl FnOnce(&mut egui::Ui)) {
-    ui.label(controls::h3(title));
-    ui.add_space(controls::GAP_ROW);
-    contents(ui);
-    ui.add_space(GROUP_GAP);
-}
+/// The title row and the space under it.
+const TITLE_ROW: f32 = controls::FIELD_HEIGHT + controls::GAP_WIDE;
 
-/// Between two groups. The editor's gap between its parts, for the same reason.
-const GROUP_GAP: f32 = 28.0;
-
-/// The label over one control inside a group, for the two occasions a group holds more than one
-/// setting and the card's own title cannot name both.
-fn sub_label(ui: &mut egui::Ui, text: &str) {
+/// The name over one setting.
+fn label(ui: &mut egui::Ui, text: &str) {
     ui.label(controls::field_label(text));
     ui.add_space(controls::GAP);
 }
 
-/// Explanatory text under a control. Tertiary and in the caption size — the one place a smaller
-/// size is right, because a hint supports the setting above it rather than naming anything itself.
-fn hint(ui: &mut egui::Ui, text: &str) {
-    let is_light = !ui.visuals().dark_mode;
-    ui.add_space(4.0);
-    ui.label(
-        egui::RichText::new(text)
-            .small()
-            .color(text_tertiary(is_light)),
-    );
-}
-
-fn show_sections(ui: &mut egui::Ui, state: &mut AppState) {
+fn sections(ui: &mut egui::Ui, state: &mut AppState) {
     let t = state.t();
 
-    section(ui, t.autostart_section, |ui| {
-        let mut autostart = state.autostart_enabled && !crate::EXPERIMENTAL;
-        // A switch rather than a checkbox: this turns a behaviour on, it does not tick an item off
-        // a list, and Windows draws the two differently for exactly that reason.
-        let mut changed = false;
-        // The switch sits right after the words it belongs to. Pushed to the far edge it was
-        // technically where Windows puts one - except Windows puts it at the edge of a card, and
-        // with the cards gone it was just a switch adrift at the window border, a long way from
-        // anything explaining it.
-        ui.horizontal(|ui| {
-            ui.label(t.autostart_checkbox);
-            ui.add_space(8.0);
-            ui.add_enabled_ui(!crate::EXPERIMENTAL, |ui| { changed = controls::toggle(ui, &mut autostart).changed(); });
+    // In a dialog the switch goes to the far edge, where Windows puts it on a settings card: the
+    // dialog's edge is right there, so it reads as the end of this line rather than as adrift.
+    let mut autostart = state.autostart_enabled && !crate::EXPERIMENTAL;
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.label(t.autostart_checkbox);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add_enabled_ui(!crate::EXPERIMENTAL, |ui| {
+                changed = controls::toggle(ui, &mut autostart).changed();
+            });
         });
-        if changed {
-            state.set_autostart(autostart);
-        }
-        hint(ui, t.autostart_hint);
     });
+    if changed {
+        state.set_autostart(autostart);
+    }
+    ui.add_space(GROUP_GAP);
 
-    // Theme and language in one group, as the plan's four groups have it. They are the same kind of
-    // decision — how the window looks and reads — and splitting them put two cards on screen where
-    // one says it better.
-    let appearance = studio::text(
-        state,
-        "Apariencia e idioma",
-        "Appearance and language",
-        "Hitsura at wika",
-        "रूप और भाषा",
-    );
-    section(ui, appearance, |ui| {
-        sub_label(ui, t.appearance_section);
-        let labels = [t.theme_system, t.theme_light, t.theme_dark];
-        let selected = ThemeMode::ALL
-            .iter()
-            .position(|m| *m == state.settings.theme_mode);
-        if let Some(picked) = controls::segmented(ui, "theme", &labels, selected) {
-            state.set_theme_mode(ThemeMode::ALL[picked]);
-        }
-        hint(ui, t.theme_hint);
+    label(ui, t.appearance_section);
+    let labels = [t.theme_system, t.theme_light, t.theme_dark];
+    let selected = ThemeMode::ALL
+        .iter()
+        .position(|m| *m == state.settings.theme_mode);
+    if let Some(picked) = controls::segmented(ui, "theme", &labels, selected) {
+        state.set_theme_mode(ThemeMode::ALL[picked]);
+    }
+    ui.add_space(GROUP_GAP);
 
-        ui.add_space(controls::GAP_STACK);
-        sub_label(ui, t.language_section);
-        // Each option is written in its own language, so someone who cannot read the current
-        // interface language can still find theirs — falling back to a Latin spelling for any
-        // script the loaded fonts can't draw yet.
-        let labels: Vec<&str> = Lang::ALL
-            .iter()
-            .map(|lang| lang.picker_label(ui.ctx()))
-            .collect();
-        let selected = Lang::ALL.iter().position(|l| *l == state.settings.lang);
-        if let Some(picked) = controls::segmented(ui, "language", &labels, selected) {
-            state.set_language(Lang::ALL[picked]);
-        }
-        hint(ui, t.language_hint);
-    });
+    label(ui, t.language_section);
+    // Each option is written in its own language, so someone who cannot read the current
+    // interface language can still find theirs — falling back to a Latin spelling for any
+    // script the loaded fonts can't draw yet.
+    let labels: Vec<&str> = Lang::ALL
+        .iter()
+        .map(|lang| lang.picker_label(ui.ctx()))
+        .collect();
+    let selected = Lang::ALL.iter().position(|l| *l == state.settings.lang);
+    if let Some(picked) = controls::segmented(ui, "language", &labels, selected) {
+        state.set_language(Lang::ALL[picked]);
+    }
+    ui.add_space(GROUP_GAP);
 
-    section(ui, t.transfer_section, |ui| {
-        // Wrapped so the two buttons stack instead of running off the edge on a narrow window.
-        ui.horizontal_wrapped(|ui| {
-            if controls::button(ui, t.export_button, Tone::Normal, true).clicked() {
-                state.export_expansions();
-            }
-            if controls::button(ui, t.import_button, Tone::Normal, true).clicked() {
-                state.import_expansions();
-            }
-        });
-        hint(ui, t.transfer_hint);
-    });
-
-    section(ui, t.prefix_section, |ui| {
+    label(ui, t.prefix_section);
+    // Wrapped, so on a narrow window the typed-in prefix drops under the suggestions instead of
+    // running off the dialog.
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(controls::GAP_WIDE, controls::GAP);
         // No segment is lit when the prefix was typed by hand and matches none of these — which is
         // the honest answer, rather than lighting whichever one happens to be closest.
         let labels: Vec<String> = PREFIX_SUGGESTIONS
@@ -170,73 +181,95 @@ fn show_sections(ui: &mut egui::Ui, state: &mut AppState) {
         if let Some(picked) = controls::segmented(ui, "prefix", &labels, selected) {
             state.set_prefix(PREFIX_SUGGESTIONS[picked].to_string());
         }
-        hint(ui, t.prefix_hint);
+        custom_prefix(ui, state);
+    });
+    ui.add_space(controls::GAP_ROW);
+    if controls::button(ui, t.apply_prefix, Tone::Normal, true).clicked() {
+        state.apply_prefix_to_existing();
+    }
+    ui.add_space(GROUP_GAP);
 
-        ui.add_space(controls::GAP_WIDE);
-        ui.horizontal(|ui| {
-            ui.label(t.custom_label);
-            // The field keeps its own buffer while it is being typed in, instead of being re-cloned
-            // from the committed prefix on every frame.
-            //
-            // `set_prefix` refuses an empty value — rightly, since every trigger needs one — and
-            // the old field then redrew itself from the prefix that was still stored, while egui's
-            // cursor stayed at the start of what the user had just cleared. Backspacing ":" away
-            // and typing ";" put the new character *in front of* the old one: the prefix became
-            // ";:", saved without a word, and every expansion created afterwards took it.
-            //
-            // Nothing is committed until it is usable, so the empty moment in the middle of an edit
-            // now stays on screen, which is what it always looked like it was doing.
-            let buffer_id = egui::Id::new("settings_custom_prefix");
-            let mut custom = ui
-                .data(|d| d.get_temp::<String>(buffer_id))
-                .unwrap_or_else(|| state.settings.prefix.clone());
-            let response = ui.add(controls::text_field(&mut custom).desired_width(90.0));
-            if response.changed() {
-                ui.data_mut(|d| d.insert_temp(buffer_id, custom.clone()));
-                if !custom.trim().is_empty() {
-                    // Still one save per keystroke, and deliberately so: a prefix is one to three
-                    // characters typed once in a blue moon, and deferring the commit to `lost_focus`
-                    // would silently drop the edit for anyone who closes this screen with Esc.
-                    state.set_prefix(custom);
-                }
-            }
-            // Dropped as soon as the field is done with, so it goes back to following the stored
-            // prefix — including when that was changed from the row of suggestions just above.
-            if response.lost_focus() {
-                ui.data_mut(|d| d.remove::<String>(buffer_id));
-            }
-        });
-
-        ui.add_space(controls::GAP_WIDE);
-        if controls::button(ui, t.apply_prefix, Tone::Normal, true).clicked() {
-            state.apply_prefix_to_existing();
+    label(ui, t.transfer_section);
+    // Wrapped so the two buttons stack instead of running off the edge on a narrow window.
+    ui.horizontal_wrapped(|ui| {
+        if controls::button(ui, t.export_button, Tone::Normal, true).clicked() {
+            state.export_expansions();
         }
-        hint(ui, t.apply_prefix_hint);
+        if controls::button(ui, t.import_button, Tone::Normal, true).clicked() {
+            state.import_expansions();
+        }
     });
 
-    ui.add_space(controls::GAP_TIGHT);
+    // What the last action said — an export's count, an import's result, a refusal — right under
+    // the buttons that caused it.
+    if let Some(note) = &state.settings_note {
+        ui.add_space(GROUP_GAP);
+        let (closed, _) = crate::app::infobar(ui, note, t);
+        if closed {
+            state.settings_note = None;
+        }
+    }
+
+    ui.add_space(GROUP_GAP + controls::GAP);
     let is_light = !ui.visuals().dark_mode;
     let quiet = text_tertiary(is_light);
-    ui.label(
-        egui::RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
-            .small()
-            .color(quiet),
-    );
     // Espanso's version, stated and left alone. No comparison against what this build was tested
     // with, and no nudge to update: in an office the right thing is usually to stay on a version
     // that works, and a badge implying otherwise would manufacture a worry nobody needs.
-    if let Some(version) = &state.espanso_version {
-        ui.label(
-            egui::RichText::new(format!("Espanso {version}"))
-                .small()
-                .color(quiet),
-        );
-    }
+    let versions = match &state.espanso_version {
+        Some(espanso) => format!("v{} · Espanso {espanso}", env!("CARGO_PKG_VERSION")),
+        None => format!("v{}", env!("CARGO_PKG_VERSION")),
+    };
+    ui.label(egui::RichText::new(versions).small().color(quiet));
     ui.label(egui::RichText::new(t.made_by).small().color(quiet));
-    ui.label(egui::RichText::new(t.credits_espanso).small().color(quiet));
-    // The gutter the window already has is drawn *around* the scroll area, not inside it, so the
-    // last line would otherwise end flush against the bottom edge. See the note in `App::ui`.
-    ui.add_space(controls::GAP_STACK);
+}
+
+/// Set while the dialog is closed, so the frame that opens it knows it is the first.
+fn fresh_id() -> egui::Id {
+    egui::Id::new("settings_fresh")
+}
+
+fn custom_prefix_id() -> egui::Id {
+    egui::Id::new("settings_custom_prefix")
+}
+
+/// The field for a prefix none of the suggestions offers, after its own short name.
+fn custom_prefix(ui: &mut egui::Ui, state: &mut AppState) {
+    let t = state.t();
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = controls::GAP;
+        ui.label(t.custom_label);
+        // The field keeps its own buffer while it is being typed in, instead of being re-cloned
+        // from the committed prefix on every frame.
+        //
+        // `set_prefix` refuses an empty value — rightly, since every trigger needs one — and
+        // the old field then redrew itself from the prefix that was still stored, while egui's
+        // cursor stayed at the start of what the user had just cleared. Backspacing ":" away
+        // and typing ";" put the new character *in front of* the old one: the prefix became
+        // ";:", saved without a word, and every expansion created afterwards took it.
+        //
+        // Nothing is committed until it is usable, so the empty moment in the middle of an edit
+        // now stays on screen, which is what it always looked like it was doing.
+        let buffer_id = custom_prefix_id();
+        let mut custom = ui
+            .data(|d| d.get_temp::<String>(buffer_id))
+            .unwrap_or_else(|| state.settings.prefix.clone());
+        let response = ui.add(controls::text_field(&mut custom).desired_width(64.0));
+        if response.changed() {
+            ui.data_mut(|d| d.insert_temp(buffer_id, custom.clone()));
+            if !custom.trim().is_empty() {
+                // Still one save per keystroke, and deliberately so: a prefix is one to three
+                // characters typed once in a blue moon, and deferring the commit to `lost_focus`
+                // would silently drop the edit for anyone who closes this dialog with Esc.
+                state.set_prefix(custom);
+            }
+        }
+        // Dropped as soon as the field is done with, so it goes back to following the stored
+        // prefix — including when that was changed from the row of suggestions just beside it.
+        if response.lost_focus() {
+            ui.data_mut(|d| d.remove::<String>(buffer_id));
+        }
+    });
 }
 
 /// How much of a folder name a line shows. Folder names come from the user and nothing stops one
@@ -245,9 +278,8 @@ const FOLDER_NAME_MAX_CHARS: usize = 32;
 
 /// The folder picker that stands in front of an export or an import.
 ///
-/// Drawn from `App::ui` next to the delete confirmation, not from [`show`], for the same reason
-/// that one is: a modal belongs to the window rather than to the panel whose button opened it, and
-/// the document it is holding has to outlive the frame the button was pressed in.
+/// Drawn from `App::ui` right after [`show`], not from inside it: it has to be the modal on top of
+/// Ajustes, and the document it is holding has to outlive the frame the button was pressed in.
 ///
 /// One line per folder, ticked or not, in the same line the folder menu and «Mover a una carpeta»
 /// use — so a folder is chosen the same way everywhere, and the check says what is included
