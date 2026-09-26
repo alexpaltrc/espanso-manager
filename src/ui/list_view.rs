@@ -134,7 +134,9 @@ fn end_hover_frame(ctx: &egui::Context) {
 /// pointer last left the list — and fades out, in place, when the pointer leaves.
 ///
 /// Positions are kept relative to the top of the list's content, not the screen, so scrolling
-/// carries the wash with its row instead of leaving it to catch up.
+/// carries the wash with its row instead of leaving it to catch up. That is also why the list does
+/// not use [`crate::ui::glide`]'s groups, which measure from their first control: here the first
+/// row drawn changes with every scroll, because rows off screen are not drawn at all.
 #[derive(Clone, Copy, Default)]
 struct Glide {
     top: f32,
@@ -147,13 +149,6 @@ struct Glide {
     right: f32,
 }
 
-/// How quickly the wash reaches its row: a critically damped spring, so it arrives without
-/// bouncing. At 34 it covers nine tenths of the way in about 0.11 s.
-const GLIDE_OMEGA: f32 = 34.0;
-/// How long the wash takes to appear, and to go.
-const GLIDE_FADE_IN: f32 = 0.10;
-const GLIDE_FADE_OUT: f32 = 0.16;
-
 fn glide_key() -> egui::Id {
     egui::Id::new("library-glide")
 }
@@ -161,14 +156,6 @@ fn glide_key() -> egui::Id {
 /// Where the row under the pointer reports its rectangle, this frame.
 fn glide_target_key() -> egui::Id {
     egui::Id::new("library-glide-target")
-}
-
-/// One step of a critically damped spring, exact for any `dt`: `x` is the distance still to go.
-fn spring_step(x: f32, v: f32, dt: f32) -> (f32, f32) {
-    let w = GLIDE_OMEGA;
-    let decay = (-w * dt).exp();
-    let b = v + w * x;
-    ((x + b * dt) * decay, (v - w * b * dt) * decay)
 }
 
 /// Moves the wash one frame towards the row the pointer is over, and paints it into `slot`.
@@ -192,18 +179,18 @@ fn glide(ui: &egui::Ui, slot: egui::layers::ShapeIdx, origin: f32, is_light: boo
                 g.top_speed = 0.0;
                 g.height_speed = 0.0;
             } else {
-                let (x, v) = spring_step(g.top - top, g.top_speed, dt);
+                let (x, v) = crate::ui::glide::spring_step(g.top - top, g.top_speed, dt);
                 g.top = top + x;
                 g.top_speed = v;
-                let (x, v) = spring_step(g.height - rect.height(), g.height_speed, dt);
+                let (x, v) = crate::ui::glide::spring_step(g.height - rect.height(), g.height_speed, dt);
                 g.height = rect.height() + x;
                 g.height_speed = v;
             }
             g.left = rect.left();
             g.right = rect.right();
-            g.alpha = (g.alpha + dt / GLIDE_FADE_IN).min(1.0);
+            g.alpha = (g.alpha + dt / crate::ui::glide::FADE_IN).min(1.0);
         }
-        None => g.alpha = (g.alpha - dt / GLIDE_FADE_OUT).max(0.0),
+        None => g.alpha = (g.alpha - dt / crate::ui::glide::FADE_OUT).max(0.0),
     }
 
     let moving = target.is_some_and(|rect| {

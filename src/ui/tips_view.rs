@@ -58,10 +58,9 @@ fn topic(ui: &mut egui::Ui, first: bool, title: &str, contents: impl FnOnce(&mut
         egui::vec2(ui.available_width(), controls::FIELD_HEIGHT),
         egui::Sense::click(),
     );
+    controls::subtle_wash(ui, &response, true);
     if ui.is_rect_visible(rect) {
         let ink = ui.visuals().text_color();
-        ui.painter()
-            .rect_filled(rect, controls::RADIUS_CONTROL, controls::subtle_fill(ui, &response));
         let icon = egui::Rect::from_min_size(
             egui::pos2(rect.left() + controls::GAP, rect.center().y - CHEVRON * 0.5),
             egui::Vec2::splat(CHEVRON),

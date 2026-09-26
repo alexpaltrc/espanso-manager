@@ -687,13 +687,13 @@ pub fn primary_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
     response
 }
 
-/// Paints one segment's background: the lit fill when it is the chosen one, a hover wash when the
-/// pointer is over it, nothing otherwise.
+/// Paints one segment's background: the lit fill when it is the chosen one, nothing otherwise. The
+/// hover wash is not a segment's own: it glides along the track — see [`crate::ui::glide`].
 ///
 /// The chosen side is *tinted* rather than filled with raw accent. A segmented control is a position
 /// of a switch, not the primary action on the screen; giving it the same weight as the filled button
 /// would leave two things shouting at once.
-pub fn segment_background(ui: &egui::Ui, rect: egui::Rect, selected: bool, hovered: bool) {
+pub fn segment_background(ui: &egui::Ui, rect: egui::Rect, selected: bool) {
     let is_light = !ui.visuals().dark_mode;
     let accent_color = accent(ui.visuals());
     let radius = egui::CornerRadius::same(3);
@@ -701,8 +701,6 @@ pub fn segment_background(ui: &egui::Ui, rect: egui::Rect, selected: bool, hover
 
     let bg = if selected {
         selection_tint(is_light, accent_color)
-    } else if hovered {
-        hover_tint(is_light)
     } else {
         egui::Color32::TRANSPARENT
     };
@@ -804,8 +802,15 @@ pub fn segmented<S: AsRef<str>>(
                         egui::Sense::click(),
                     );
 
+                    crate::ui::glide::item(
+                        ui,
+                        &response,
+                        3,
+                        !is_selected && response.hovered(),
+                        hover_tint(is_light),
+                    );
                     if ui.is_rect_visible(rect) {
-                        segment_background(ui, rect, is_selected, response.hovered());
+                        segment_background(ui, rect, is_selected);
                         let ink = if is_selected {
                             ui.visuals().text_color()
                         } else {
@@ -911,6 +916,18 @@ pub fn subtle_fill(ui: &egui::Ui, response: &egui::Response) -> egui::Color32 {
     }
 }
 
+/// Where a borderless control used to paint [`subtle_fill`] itself: the fill now belongs to the
+/// wash its group shares, which glides from control to control. See [`crate::ui::glide`].
+///
+/// Called whether or not the control is on screen, because the first control of a group to call it
+/// is the one its wash is measured from; skipping it while scrolled out of sight would move that
+/// reference and the wash with it.
+pub fn subtle_wash(ui: &egui::Ui, response: &egui::Response, enabled: bool) {
+    let fill = subtle_fill(ui, response);
+    let lit = enabled && fill != egui::Color32::TRANSPARENT;
+    crate::ui::glide::item(ui, response, RADIUS_CONTROL, lit, fill);
+}
+
 /// A square, borderless button showing one icon — the pause, `+` and `…` of the command bar.
 ///
 /// `tip` is required: an icon without words has to be able to say what it does, and the tooltip is
@@ -920,8 +937,8 @@ pub fn icon_button(ui: &mut egui::Ui, glyph: Glyph, tip: &str, enabled: bool) ->
     let (rect, response) = ui.allocate_exact_size(egui::Vec2::splat(FIELD_HEIGHT), sense);
     let response = response.on_hover_text(tip);
     let is_light = !ui.visuals().dark_mode;
+    subtle_wash(ui, &response, enabled);
     if ui.is_rect_visible(rect) {
-        ui.painter().rect_filled(rect, RADIUS_CONTROL, subtle_fill(ui, &response));
         let ink = if enabled { ui.visuals().text_color() } else { disabled_text(is_light) };
         glyphs::paint(ui, rect, glyph, glyphs::SIZE, ink);
     }
@@ -957,8 +974,8 @@ pub fn subtle_button(
     let width = subtle_button_width(ui, leading.is_some(), label, trailing.is_some());
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(width, FIELD_HEIGHT), egui::Sense::click());
+    subtle_wash(ui, &response, true);
     if ui.is_rect_visible(rect) {
-        ui.painter().rect_filled(rect, RADIUS_CONTROL, subtle_fill(ui, &response));
         let mut x = rect.left() + SUBTLE_PAD;
         if let Some(glyph) = leading {
             let icon = egui::Rect::from_min_size(
@@ -1082,9 +1099,9 @@ fn menu_line(
     let width = natural.max(ui.available_width());
     let sense = if enabled { egui::Sense::click() } else { egui::Sense::hover() };
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, MENU_ROW), sense);
+    subtle_wash(ui, &response, enabled);
     if ui.is_rect_visible(rect) {
         let painter = ui.painter();
-        painter.rect_filled(rect, RADIUS_CONTROL, subtle_fill(ui, &response));
         let icon = egui::Rect::from_min_size(
             egui::pos2(rect.left() + MENU_PAD_X, rect.center().y - glyphs::SIZE * 0.5),
             egui::Vec2::splat(glyphs::SIZE),

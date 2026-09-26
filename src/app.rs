@@ -2796,6 +2796,7 @@ impl eframe::App for EspansoManagerApp {
         ui::list_view::show_create_folder_modal(ui.ctx(), &mut self.state);
         ui::list_view::show_pending_confirm(ui.ctx(), &mut self.state);
         ui::settings_view::show_folder_picker(ui.ctx(), &mut self.state);
+        ui::glide::end_frame(ui.ctx());
 
         if std::mem::take(&mut self.state.pause_toggle_requested) {
             let t = self.state.t();

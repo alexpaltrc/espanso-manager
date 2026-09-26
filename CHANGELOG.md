@@ -46,7 +46,10 @@ When it is, this heading becomes `## 0.0.2 — <date>` and the `-dev` comes off 
   - **Fluid hover in the list.** One soft highlight glides from row to row under the pointer
     instead of each row lighting up and going dark on its own. It fades in where it first lands
     and fades out in place when the pointer leaves; with Windows' animation effects off it only
-    fades, it never travels.
+    fades, it never travels. The same glide now runs through the rest of the app: the command
+    bar's buttons, every menu, the switches in Settings and the topics of the guide. It never
+    lands on a disabled line, and slides under the chosen segment without covering it. Outlined
+    buttons and chips keep their own hover, because their fill is part of their shape.
   - The status dot sits at the middle of its word, not level with the top of the capitals. The
     start-up switch reads **Start EspansoManager with Windows**, without "(and Espanso)".
 - **A new interface, from the library to the last dialog** (2026-09-22). One central library
