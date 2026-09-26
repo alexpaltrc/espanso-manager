@@ -118,6 +118,25 @@ pub fn is_light_taskbar() -> bool {
         .unwrap_or(false)
 }
 
+/// Whether Windows' «Efectos de animación» switch is on. Off means things may still appear and
+/// fade, but should not travel. Unreadable counts as on, Windows' own default.
+pub fn animations_enabled() -> bool {
+    use windows::core::BOOL;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SystemParametersInfoW, SPI_GETCLIENTAREAANIMATION, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
+    };
+    let mut on = BOOL(1);
+    let read = unsafe {
+        SystemParametersInfoW(
+            SPI_GETCLIENTAREAANIMATION,
+            0,
+            Some(&mut on as *mut BOOL as *mut std::ffi::c_void),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+    };
+    read.is_err() || on.as_bool()
+}
+
 /// Native contrast themes override branded icon colours. Return background/foreground in RGB.
 pub fn contrast_colors() -> Option<([u8; 3], [u8; 3])> {
     use windows::Win32::UI::Accessibility::{HIGHCONTRASTW, HCF_HIGHCONTRASTON};

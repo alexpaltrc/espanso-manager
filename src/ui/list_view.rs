@@ -43,7 +43,9 @@
 //! **Hover.** Two slots, one frame apart. A row must know whether it is highlighted *before* it
 //! draws, which is before it can learn whether the pointer is over it, so it reads last frame's
 //! answer; the pending slot is what stops the highlight sticking to a row that has since been
-//! scrolled away, filtered out or deleted.
+//! scrolled away, filtered out or deleted. Those slots now only decide the chosen row's own
+//! hover shade; the wash under an ordinary row is one shape for the whole list that glides from
+//! row to row — see [`Glide`].
 //!
 //! **Drag and drop.** A drop is a call to `AppState::assign_folder_to_triggers` and nothing moves in
 //! `base.yml`. The targets are a strip of folder names laid over the top of the list only while
@@ -119,6 +121,125 @@ fn end_hover_frame(ctx: &egui::Context) {
     if shown != reported {
         ctx.request_repaint();
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Fluid hover
+// ---------------------------------------------------------------------------------------------
+
+/// The one wash that follows the pointer down the list. Rows do not tint themselves on hover: a
+/// single shape, painted under all of them, glides from the row it was on to the row the pointer
+/// is on now, so moving down the list reads as one movement instead of a row going dark and
+/// another lighting up. It fades in where it first lands — it never flies in from wherever the
+/// pointer last left the list — and fades out, in place, when the pointer leaves.
+///
+/// Positions are kept relative to the top of the list's content, not the screen, so scrolling
+/// carries the wash with its row instead of leaving it to catch up.
+#[derive(Clone, Copy, Default)]
+struct Glide {
+    top: f32,
+    height: f32,
+    top_speed: f32,
+    height_speed: f32,
+    /// 0 is gone, 1 is fully lit.
+    alpha: f32,
+    left: f32,
+    right: f32,
+}
+
+/// How quickly the wash reaches its row: a critically damped spring, so it arrives without
+/// bouncing. At 34 it covers nine tenths of the way in about 0.11 s.
+const GLIDE_OMEGA: f32 = 34.0;
+/// How long the wash takes to appear, and to go.
+const GLIDE_FADE_IN: f32 = 0.10;
+const GLIDE_FADE_OUT: f32 = 0.16;
+
+fn glide_key() -> egui::Id {
+    egui::Id::new("library-glide")
+}
+
+/// Where the row under the pointer reports its rectangle, this frame.
+fn glide_target_key() -> egui::Id {
+    egui::Id::new("library-glide-target")
+}
+
+/// One step of a critically damped spring, exact for any `dt`: `x` is the distance still to go.
+fn spring_step(x: f32, v: f32, dt: f32) -> (f32, f32) {
+    let w = GLIDE_OMEGA;
+    let decay = (-w * dt).exp();
+    let b = v + w * x;
+    ((x + b * dt) * decay, (v - w * b * dt) * decay)
+}
+
+/// Moves the wash one frame towards the row the pointer is over, and paints it into `slot`.
+fn glide(ui: &egui::Ui, slot: egui::layers::ShapeIdx, origin: f32, is_light: bool) {
+    let ctx = ui.ctx();
+    let target = ctx.data_mut(|d| {
+        let rect = d.get_temp::<egui::Rect>(glide_target_key());
+        d.remove::<egui::Rect>(glide_target_key());
+        rect
+    });
+    let mut g = ctx.data(|d| d.get_temp::<Glide>(glide_key())).unwrap_or_default();
+    let dt = ui.input(|i| i.stable_dt).clamp(0.0, 1.0 / 20.0);
+
+    match target {
+        Some(rect) => {
+            let top = rect.top() - origin;
+            // A fresh arrival, or Windows asked for no travelling: land in place.
+            if g.alpha < 0.02 || !crate::theme::animations_enabled() {
+                g.top = top;
+                g.height = rect.height();
+                g.top_speed = 0.0;
+                g.height_speed = 0.0;
+            } else {
+                let (x, v) = spring_step(g.top - top, g.top_speed, dt);
+                g.top = top + x;
+                g.top_speed = v;
+                let (x, v) = spring_step(g.height - rect.height(), g.height_speed, dt);
+                g.height = rect.height() + x;
+                g.height_speed = v;
+            }
+            g.left = rect.left();
+            g.right = rect.right();
+            g.alpha = (g.alpha + dt / GLIDE_FADE_IN).min(1.0);
+        }
+        None => g.alpha = (g.alpha - dt / GLIDE_FADE_OUT).max(0.0),
+    }
+
+    let moving = target.is_some_and(|rect| {
+        (g.top - (rect.top() - origin)).abs() > 0.1
+            || (g.height - rect.height()).abs() > 0.1
+            || g.top_speed.abs() > 0.5
+    });
+    if moving || (g.alpha > 0.0 && g.alpha < 1.0) {
+        ctx.request_repaint();
+    }
+
+    if g.alpha > 0.0 {
+        let rect = egui::Rect::from_min_max(
+            egui::pos2(g.left, origin + g.top),
+            egui::pos2(g.right, origin + g.top + g.height),
+        );
+        ui.painter().set(
+            slot,
+            egui::epaint::RectShape::filled(
+                rect,
+                controls::RADIUS_CONTROL,
+                crate::app::hover_tint(is_light).gamma_multiply(g.alpha),
+            ),
+        );
+    }
+    ctx.data_mut(|d| d.insert_temp(glide_key(), g));
+}
+
+/// The stretch of the list the wash covers right now, in screen coordinates — where the rules
+/// between rows stand aside, since a hairline through a tinted block reads as damage. Only while
+/// the wash is solid enough to be the thing the eye sees there.
+fn glide_band(ctx: &egui::Context, origin: f32) -> Option<egui::Rangef> {
+    let g = ctx.data(|d| d.get_temp::<Glide>(glide_key()))?;
+    (g.alpha > 0.35).then(|| {
+        egui::Rangef::new(origin + g.top - 0.5, origin + g.top + g.height + 0.5)
+    })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -327,6 +448,9 @@ struct RowPass {
     /// The row saved a moment ago and how lit it still is — see [`flash_now`]. Hoisted like the
     /// rest: it is one answer for the whole pass, and it reads the clock to get it.
     flash: Option<(egui::Id, f32)>,
+    /// Where the hover wash stands — see [`glide_band`]. Filled in inside the scroll area, the
+    /// only place that knows where the list's content starts.
+    glide: Option<egui::Rangef>,
 }
 
 fn row_pass(ui: &egui::Ui, compact: bool, select_mode: bool, trigger_w: f32) -> RowPass {
@@ -339,6 +463,7 @@ fn row_pass(ui: &egui::Ui, compact: bool, select_mode: bool, trigger_w: f32) -> 
         select_mode,
         trigger_w,
         flash: flash_now(ui.ctx()),
+        glide: None,
     }
 }
 
@@ -1393,6 +1518,11 @@ fn show_list(
 
             ui.set_width(ui.available_width());
             ui.spacing_mut().item_spacing.y = 0.0;
+            // The hover wash goes under every row, so its place in the paint order is taken now
+            // and filled in once the rows have said which of them the pointer is over.
+            let origin = ui.cursor().top();
+            let slot = ui.painter().add(egui::Shape::Noop);
+            let pass = RowPass { glide: glide_band(ui.ctx(), origin), ..pass };
             let mut previous_lit = true; // No rule above the first row.
             for &index in visible {
                 let row = &list.rows[index];
@@ -1410,6 +1540,7 @@ fn show_list(
                     previous_lit,
                 );
             }
+            glide(ui, slot, origin, is_light);
         });
 }
 
@@ -1531,11 +1662,13 @@ fn show_row_inner(
     let flash = pass
         .flash
         .and_then(|(lit, amount)| (lit == drag_id).then_some(amount));
-    let lit = is_selected || is_open || hovered_row || flash.is_some();
+    // The hover is not the row's to paint: see [`Glide`].
+    let lit = is_selected || is_open || flash.is_some();
 
     // The rule between two rows, drawn rather than implied by a box around each. It stops at
     // anything tinted, so a highlighted row reads as one continuous shape.
-    if !previous_lit && !lit {
+    let under_glide = pass.glide.is_some_and(|band| band.contains(ui.cursor().top()));
+    if !previous_lit && !lit && !under_glide {
         ui.painter().hline(
             ui.max_rect().x_range(),
             ui.cursor().top(),
@@ -1561,8 +1694,6 @@ fn show_row_inner(
         } else {
             crate::app::selection_tint(is_light, accent_color)
         }
-    } else if hovered_row {
-        crate::app::hover_tint(is_light)
     } else {
         egui::Color32::TRANSPARENT
     };
@@ -1632,6 +1763,13 @@ fn show_row_inner(
                 }
             }
         });
+
+    // Under the pointer: tell the wash where to go. Not while something is being dragged — the
+    // wash following a drag across the list would compete with the drop targets.
+    if pass.dragged_id.is_none() && ui.rect_contains_pointer(framed.response.rect) {
+        let rect = framed.response.rect;
+        ui.ctx().data_mut(|d| d.insert_temp(glide_target_key(), rect));
+    }
 
     // The accent's one appearance in the list: a short bar beside the chosen row.
     if is_open {

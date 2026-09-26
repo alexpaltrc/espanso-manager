@@ -43,6 +43,10 @@ When it is, this heading becomes `## 0.0.2 — <date>` and the `-dev` comes off 
   - Keyboard: Ctrl+N new, Ctrl+L or Ctrl+F search, arrows and Enter in the list, F2 folder
     options, Del delete (always asked), Ctrl+S save, Esc backs out one layer at a time. None of
     them act while text is being typed. Shortcuts are shown in tooltips, menus and the guide.
+  - **Fluid hover in the list.** One soft highlight glides from row to row under the pointer
+    instead of each row lighting up and going dark on its own. It fades in where it first lands
+    and fades out in place when the pointer leaves; with Windows' animation effects off it only
+    fades, it never travels.
   - The status dot sits at the middle of its word, not level with the top of the capitals. The
     start-up switch reads **Start EspansoManager with Windows**, without "(and Espanso)".
 - **A new interface, from the library to the last dialog** (2026-09-22). One central library
