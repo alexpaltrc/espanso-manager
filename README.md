@@ -71,11 +71,13 @@ second program to go and fetch, and nothing to install — one ZIP, unzip it, op
 | 🌍 | Speak English, Spanish, Filipino or Hindi. |
 | 💾 | Keep a backup of every save, in case you change your mind. |
 
-There is more than this in there. It is meant to be found by u> 📏 Those two numbers are measured, not estimated, on version 0.0.2 with the app hidden in the
+There is more than this in there. It is meant to be found by using it.
+
+> 📏 Those two numbers are measured, not estimated, on version 0.0.2 with the app hidden in the
 > tray: 103.6–104.8 MB of working set, and 16–62 ms of CPU per 150 seconds in five of six
 > consecutive samples, handle count steady at 367–368. The sixth sample read 2.5 s, did not
 > repeat, and was not explained. Taken on the author's machine, so yours will read differently —
-> but idle is meant to cost nothing, and it is checked rather than assumed.n assumed.
+> but idle is meant to cost nothing, and it is checked rather than assumed.
 
 ---
 
