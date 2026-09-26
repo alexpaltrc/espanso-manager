@@ -1672,6 +1672,23 @@ pub fn accent_fill(visuals: &egui::Visuals) -> (egui::Color32, egui::Color32) {
 /// Applied once at startup and never again: it only touches `text_styles` and `spacing`, which
 /// `Context::set_visuals` does not overwrite — unlike the palette in [`tuned_visuals`], which has to
 /// be re-applied on every theme switch.
+/// Windows' «Efectos de animación», handed to what egui animates by itself: menus fading in, the
+/// banner sliding, the list scrolling to a row. Off, all of it happens at once. What the app
+/// animates itself — the hover wash, the switch, the saved row's tint — asks
+/// [`crate::theme::animations_enabled`] directly.
+fn apply_motion(ctx: &egui::Context) {
+    let on = crate::theme::animations_enabled();
+    let defaults = egui::Style::default();
+    ctx.all_styles_mut(|style| {
+        style.animation_time = if on { defaults.animation_time } else { 0.0 };
+        style.scroll_animation = if on {
+            defaults.scroll_animation.clone()
+        } else {
+            egui::style::ScrollAnimation::none()
+        };
+    });
+}
+
 fn apply_layout_style(ctx: &egui::Context, text_scale: f32) {
     // Windows 11's own ramp, in the same units egui measures in, rather than egui's defaults
     // multiplied by some factor:
@@ -2095,6 +2112,8 @@ impl EspansoManagerApp {
         // type up on precisely the machine we know least about.
         let text_scale = work_area.map_or(1.0, |a| crate::display::text_scale(a.height));
         apply_layout_style(&cc.egui_ctx, text_scale);
+        crate::theme::refresh_animations();
+        apply_motion(&cc.egui_ctx);
         apply_theme(&cc.egui_ctx, window.as_deref(), is_light);
         // The title bar is the one strip of this window that Windows draws, and on Windows 11 it can
         // wear Mica — the wallpaper, blurred and tinted to the theme — as Explorer's and Settings'
@@ -2565,6 +2584,10 @@ impl EspansoManagerApp {
             }
         }
         self.last_theme_check = now;
+
+        if crate::theme::refresh_animations() {
+            apply_motion(ctx);
+        }
 
         if let Err(message) = self.tray.refresh_appearance(self.state.t()) {
             self.state.set_error_banner(message);

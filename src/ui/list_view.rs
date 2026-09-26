@@ -168,12 +168,13 @@ fn glide(ui: &egui::Ui, slot: egui::layers::ShapeIdx, origin: f32, is_light: boo
     });
     let mut g = ctx.data(|d| d.get_temp::<Glide>(glide_key())).unwrap_or_default();
     let dt = ui.input(|i| i.stable_dt).clamp(0.0, 1.0 / 20.0);
+    let animate = crate::theme::animations_enabled();
 
     match target {
         Some(rect) => {
             let top = rect.top() - origin;
             // A fresh arrival, or Windows asked for no travelling: land in place.
-            if g.alpha < 0.02 || !crate::theme::animations_enabled() {
+            if g.alpha < 0.02 || !animate {
                 g.top = top;
                 g.height = rect.height();
                 g.top_speed = 0.0;
@@ -188,9 +189,11 @@ fn glide(ui: &egui::Ui, slot: egui::layers::ShapeIdx, origin: f32, is_light: boo
             }
             g.left = rect.left();
             g.right = rect.right();
-            g.alpha = (g.alpha + dt / crate::ui::glide::FADE_IN).min(1.0);
+            g.alpha = if animate { (g.alpha + dt / crate::ui::glide::FADE_IN).min(1.0) } else { 1.0 };
         }
-        None => g.alpha = (g.alpha - dt / crate::ui::glide::FADE_OUT).max(0.0),
+        None => {
+            g.alpha = if animate { (g.alpha - dt / crate::ui::glide::FADE_OUT).max(0.0) } else { 0.0 }
+        }
     }
 
     let moving = target.is_some_and(|rect| {
@@ -306,7 +309,9 @@ fn flash_now(ctx: &egui::Context) -> Option<(egui::Id, f32)> {
     // Nothing else is asking for frames while the pointer sits still, so without this the row
     // would stay lit until the user next moved the mouse.
     ctx.request_repaint();
-    Some((row_id(&trigger), (left / FLASH_FADE).min(1.0) as f32))
+    // With Windows' animation effects off the tint does not fade: it is there, and then it is not.
+    let amount = if crate::theme::animations_enabled() { (left / FLASH_FADE).min(1.0) } else { 1.0 };
+    Some((row_id(&trigger), amount as f32))
 }
 
 // ---------------------------------------------------------------------------------------------

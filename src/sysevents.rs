@@ -19,11 +19,12 @@
 
 //! Hearing about appearance and display changes from Windows instead of asking repeatedly.
 //!
-//! Windows announces a light/dark switch and an accent-colour change by broadcasting messages to
-//! every **top-level** window. Receiving them needs a window and a message loop, and eframe owns
-//! both for the real window — so this creates its own: a top-level window that is zero-sized, never
-//! shown, and marked as a tool window so it stays out of the taskbar and out of Alt-Tab. It sits on
-//! its own thread blocked inside `GetMessageW`, which costs nothing at all until a message arrives.
+//! Windows announces a light/dark switch, an accent-colour change and its animation-effects switch
+//! by broadcasting messages to every **top-level** window. Receiving them needs a window and a
+//! message loop, and eframe owns both for the real window — so this creates its own: a top-level
+//! window that is zero-sized, never shown, and marked as a tool window so it stays out of the
+//! taskbar and out of Alt-Tab. It sits on its own thread blocked inside `GetMessageW`, which costs
+//! nothing at all until a message arrives.
 //!
 //! The obvious choice — a *message-only* window, parented to `HWND_MESSAGE` — is the wrong one
 //! here, and silently so: those windows are excluded from broadcasts by design, so the listener
@@ -203,8 +204,9 @@ unsafe extern "system" fn wndproc(
         WM_DWMCOLORIZATIONCOLORCHANGED | WM_THEMECHANGED | WM_DISPLAYCHANGE => true,
         // Work-area and contrast changes can alter the tray's size/colours without changing the
         // app palette. SPI_SETLOGICALDPIOVERRIDE is used by Windows' display-scale setting.
+        // SPI_SETCLIENTAREAANIMATION is the «Efectos de animación» switch.
         WM_SETTINGCHANGE => is_immersive_color_set(lparam)
-            || matches!(wparam.0, 0x002F | 0x0043 | 0x009F),
+            || matches!(wparam.0, 0x002F | 0x0043 | 0x009F | 0x1043),
         _ => false,
     };
 

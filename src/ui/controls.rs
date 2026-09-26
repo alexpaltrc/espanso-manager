@@ -863,7 +863,9 @@ pub fn toggle(ui: &mut egui::Ui, on: &mut bool) -> egui::Response {
     if ui.is_rect_visible(rect) {
         let is_light = !ui.visuals().dark_mode;
         let (accent_color, on_ink) = accent_fill(ui.visuals());
-        let t = ui.ctx().animate_bool_with_time(response.id, *on, 0.12);
+        // With Windows' animation effects off the knob jumps, as Windows' own switches then do.
+        let travel = if crate::theme::animations_enabled() { 0.12 } else { 0.0 };
+        let t = ui.ctx().animate_bool_with_time(response.id, *on, travel);
 
         let off_fill = win_control_for(is_light);
         let fill = mix(off_fill, accent_color, t);

@@ -45,11 +45,16 @@ When it is, this heading becomes `## 0.0.2 — <date>` and the `-dev` comes off 
     them act while text is being typed. Shortcuts are shown in tooltips, menus and the guide.
   - **Fluid hover in the list.** One soft highlight glides from row to row under the pointer
     instead of each row lighting up and going dark on its own. It fades in where it first lands
-    and fades out in place when the pointer leaves; with Windows' animation effects off it only
-    fades, it never travels. The same glide now runs through the rest of the app: the command
+    and fades out in place when the pointer leaves. The same glide now runs through the rest of the app: the command
     bar's buttons, every menu, the switches in Settings and the topics of the guide. It never
     lands on a disabled line, and slides under the chosen segment without covering it. Outlined
     buttons and chips keep their own hover, because their fill is part of their shape.
+  - **Windows' animation effects switch now applies to the whole app, live.** With it off,
+    nothing travels, slides or fades: the hover is simply on what the pointer is over, the
+    start-up switch jumps, menus open at once and the list jumps to a row instead of scrolling
+    to it. The saved row's tint stays for its two seconds, then goes at once. Changing the switch
+    takes effect immediately, without restarting, the same way a theme change does. The mouse
+    wheel keeps its short smoothing: Windows keeps that under a separate setting of its own.
   - The status dot sits at the middle of its word, not level with the top of the capitals. The
     start-up switch reads **Start EspansoManager with Windows**, without "(and Espanso)".
 - **A new interface, from the library to the last dialog** (2026-09-22). One central library

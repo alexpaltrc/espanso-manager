@@ -17,8 +17,8 @@
  * along with EspansoManager.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-//! What Windows itself is currently wearing: light or dark, the accent colour, and whether
-//! contrast is on.
+//! What Windows itself is currently wearing: light or dark, the accent colour, whether contrast is
+//! on, and whether things on screen may move.
 //!
 //! A few registry reads and a preference. `ThemeMode` is the user's choice — follow the system, or
 //! pin one appearance — and `follows_system` is what lets a pinned theme skip the watch in
@@ -118,9 +118,35 @@ pub fn is_light_taskbar() -> bool {
         .unwrap_or(false)
 }
 
-/// Whether Windows' «Efectos de animación» switch is on. Off means things may still appear and
-/// fade, but should not travel. Unreadable counts as on, Windows' own default.
+/// What [`read_animations`] last answered. Asked every frame by every control that moves, so it is
+/// kept here rather than asked of Windows each time; [`refresh_animations`] re-reads it when
+/// Windows announces the switch changed.
+static ANIMATIONS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// Whether Windows' «Efectos de animación» switch is on. Off means nothing travels, slides or
+/// fades: everything appears and goes at once, as Windows' own menus and switches then do.
 pub fn animations_enabled() -> bool {
+    ANIMATIONS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Re-reads the switch. Returns whether it changed.
+pub fn refresh_animations() -> bool {
+    let now = read_animations();
+    ANIMATIONS.swap(now, std::sync::atomic::Ordering::Relaxed) != now
+}
+
+/// Unreadable counts as on, Windows' own default.
+fn read_animations() -> bool {
+    // The preview build can be shown the switch off without turning it off for the whole machine:
+    // a file beside the exe stands in for it, read at the same moments the real switch is.
+    if cfg!(feature = "preview")
+        && std::env::current_exe()
+            .ok()
+            .and_then(|exe| Some(exe.parent()?.join("preview-no-animations")))
+            .is_some_and(|flag| flag.exists())
+    {
+        return false;
+    }
     use windows::core::BOOL;
     use windows::Win32::UI::WindowsAndMessaging::{
         SystemParametersInfoW, SPI_GETCLIENTAREAANIMATION, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,

@@ -23,7 +23,7 @@
 //! borderless buttons of the command bar — do not light up and go dark one by one. The group owns
 //! a single wash that fades in where the pointer first lands, glides from control to control while
 //! the pointer stays among them, and fades out in place when it leaves. With Windows' animation
-//! effects off it still fades; it never travels.
+//! effects off it neither fades nor travels: it is simply on the control under the pointer.
 //!
 //! **A group is the `Ui` its controls are placed in**, so nothing has to be declared: the lines of
 //! one popup, the segments of one track, the buttons of one row share one. The first control of a
@@ -165,9 +165,10 @@ pub fn item(ui: &egui::Ui, response: &egui::Response, radius: u8, lit: bool, fil
 /// Moves one group's wash a frame towards its target. Returns what to paint, in screen space, and
 /// whether it is still on its way and needs another frame.
 fn step(g: &mut Group, dt: f32) -> (Option<(egui::Rect, egui::Color32, u8)>, bool) {
+    let animate = crate::theme::animations_enabled();
     match g.target {
         Some(t) => {
-            if g.alpha < 0.02 || !crate::theme::animations_enabled() {
+            if g.alpha < 0.02 || !animate {
                 g.rect = t.rect;
                 g.speed = [0.0; 4];
             } else {
@@ -186,9 +187,9 @@ fn step(g: &mut Group, dt: f32) -> (Option<(egui::Rect, egui::Color32, u8)>, boo
             }
             g.fill = t.fill;
             g.radius = t.radius;
-            g.alpha = (g.alpha + dt / FADE_IN).min(1.0);
+            g.alpha = if animate { (g.alpha + dt / FADE_IN).min(1.0) } else { 1.0 };
         }
-        None => g.alpha = (g.alpha - dt / FADE_OUT).max(0.0),
+        None => g.alpha = if animate { (g.alpha - dt / FADE_OUT).max(0.0) } else { 0.0 },
     }
 
     let moving = g.target.is_some_and(|t| {
