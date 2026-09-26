@@ -5,138 +5,95 @@ was published.
 
 ## 0.0.2 — 2026-09-25
 
+What changed since 0.0.1. Designs that were tried along the way and replaced before publishing
+are not listed.
+
 ### Added
 
 - **Pick the folders when exporting and importing.** Export asks which folders to include;
   import reads the file first and offers the folders that file actually turned out to hold. The
   expansions that belong to no folder are a choice of their own, not a leftover. The question is
   skipped when there is only one folder, because a question with one answer is not a question.
-- **Deleting a folder now asks first**, in the same style as the expansion warning.
+- **Deleting a folder now asks first**, in the same style as the expansion warning, and the
+  folder's page says beside the button that its expansions go with it.
+- **An inspector beside the list.** Choosing a row shows its whole trigger, its text (wrapped,
+  scrollable, with a copy button), its folder, **Edit** and a `…` menu to move or delete it. On
+  a narrow window it takes the place of the list, with **Back**.
+- **Choosing several expansions** is an explicit mode, entered from the `…` menu, or with Ctrl-
+  or Shift-click on a row. Changing folder or search clears the selection and says so.
+- **Keyboard shortcuts.** Ctrl+N new, Ctrl+L or Ctrl+F search, arrows and Enter in the list, F2
+  folder options, Del delete (always asked), Ctrl+S save, Esc backs out one layer at a time.
+  None of them act while text is being typed. They are shown in tooltips, menus and the guide.
+- **The editor asks before throwing away unsaved changes**, and only when there is something to
+  lose.
+- **EspansoManager has its own icon**, in Explorer, on the window and in the notification area.
+  The executable used to have none, and the tray borrowed Espanso's. The tray icon follows the light or dark colour of the taskbar,
+  and paused is a different shape, not only a different colour.
+- **Contrast themes are followed.** With a Windows contrast theme on, the app is drawn in the
+  colours chosen for it in Windows' settings.
 - **Emoji are drawn with the font Windows itself uses** for them, instead of the small one
   bundled with the interface toolkit. `👍` and `💡` used to be an illegible tangle and a bare
   ring; now they read as what they are. They remain single-colour: the toolkit this app draws
   with paints every glyph in one flat colour, so colour emoji are not possible, and the Windows
   colour emoji font would have added 12 MB to the download without changing a single pixel.
-  The app's own small icons — pencil, wastebasket, cross, plus, back arrow — are deliberately
-  drawn from the bundled faces exactly as before, so no button changed shape.
+  The app's own small icons are deliberately not drawn from it, so no button changed shape.
 
 ### Changed
 
-- **Settings is a dialog now** (2026-09-25). It opens in the middle of the window over the dimmed
-  list and cannot be moved; Esc, the cross or a click outside it closes it. It names its five
-  settings and nothing else: the sentence under each one moved to the guide, under a new
-  **Settings** topic, and so did the credit to Espanso's author. The export and import folder
-  picker opens on top of it, and what those actions report is shown inside the dialog. Turning
-  start-with-Windows on or off no longer posts a banner (the switch already says so); a failure
-  still does. On a short window the dialog scrolls under a fixed title, and it always opens at
-  the top. When a note makes the scroll bar appear or go, the contents glide aside for it over
-  half a second instead of jumping.
-- **A quieter interface, with the detail beside the list** (2026-09-25). This supersedes parts of
-  the 2026-09-22 interface described in the next entry:
-  - The library title is centred, with the real state of Espanso (a dot and **Active**,
-    **Paused** or **Not responding**) on its left, and three borderless commands on its right:
-    pause/resume, new, and a `…` menu. The search and an **All folders** menu sit under it, short
-    and centred. The folder rectangles are gone.
+- **A new, quieter interface.** One library with nothing permanently docked beside it:
+  - A centred title, with the real state of Espanso on its left — a dot and **Active**,
+    **Paused** or **Not responding**, which is what Espanso answered, not what the app assumes —
+    and three borderless commands on its right: pause/resume, new, and a `…` menu.
+  - Under it, a short centred search and an **All folders** menu that picks which folder is
+    shown.
   - Rows are the trigger in a monospaced face and a one-line preview, split by faint lines.
-    Choosing one opens an inspector on the right with the whole text (wrapped, scrollable, with
-    a copy button), its folder, **Edit** and a `…` menu for move and delete. On a narrow window
-    the inspector takes the place of the list, with **Back**.
-  - The editor, settings, the folder page, the guide and the welcome screen lost their cards,
-    numbers and subtitles: headings and space do the grouping. The editor asks before throwing
-    away unsaved changes.
-  - The move and export/import pickers are a list of folders with a check, the same lines as the
-    folder menu. A new folder is made with **Create**, not **Save**.
-  - Keyboard: Ctrl+N new, Ctrl+L or Ctrl+F search, arrows and Enter in the list, F2 folder
-    options, Del delete (always asked), Ctrl+S save, Esc backs out one layer at a time. None of
-    them act while text is being typed. Shortcuts are shown in tooltips, menus and the guide.
-  - **Fluid hover in the list.** One soft highlight glides from row to row under the pointer
-    instead of each row lighting up and going dark on its own. It fades in where it first lands
-    and fades out in place when the pointer leaves. The same glide now runs through the rest of the app: the command
-    bar's buttons, every menu, the switches in Settings and the topics of the guide. It never
-    lands on a disabled line, and slides under the chosen segment without covering it. Outlined
-    buttons and chips keep their own hover, because their fill is part of their shape.
-  - **Windows' animation effects switch now applies to the whole app, live.** With it off,
-    nothing travels, slides or fades: the hover is simply on what the pointer is over, the
-    start-up switch jumps, menus open at once and the list jumps to a row instead of scrolling
-    to it. The saved row's tint stays for its two seconds, then goes at once. Changing the switch
-    takes effect immediately, without restarting, the same way a theme change does. The mouse
-    wheel keeps its short smoothing: Windows keeps that under a separate setting of its own.
-  - The status dot sits at the middle of its word, not level with the top of the capitals. The
-    start-up switch reads **Start EspansoManager with Windows**, without "(and Espanso)".
-- **A new interface, from the library to the last dialog** (2026-09-22). One central library
-  with nothing permanently docked beside it:
-  - The title shows what Espanso really answered, not what the app assumes. The pill reads
-    **Active**, **Paused** or **Not responding**. Pause / Resume sits right beside it.
-  - Folders are rectangular filters with their counts. They run from **All** through each
-    folder to **No folder**, and wrap onto more rows instead of scrolling sideways.
-  - Each row reads **When you type → This text appears**. A row opens in place to show the whole
-    trigger, the whole text, its folder and its actions. Closed rows carry no buttons.
-  - Multiple selection is an explicit **Select** mode. **Select all** means the expansions on
-    screen. Changing folder or search clears the selection and says so. The bulk actions stay
-    disabled until something is selected.
-  - The editor is two numbered steps, with a live preview and validation next to the field it
-    concerns. **Save / Cancel** is pinned to the bottom so it never scrolls away. A text draft
-    survives switching to a date and back.
-  - Settings, the quick guide and the welcome screen were redone in the same style. All three
-    themes (light, dark, follow Windows) were checked with equal care.
-
-  Saving and coming back keeps the folder, the search, the scroll position and the open row.
-  The saved row scrolls into view and is briefly tinted.
-
-  This replaces the sidebar layout that reached the local build before it (unpublished). Its
-  sidebar and permanent inspector are gone.
+  - The editor, the folder page, the guide and the welcome screen have no cards, numbers or
+    subtitles: headings and space do the grouping. The editor's **Save / Cancel** is always on
+    screen, and a text draft survives switching to a date and back.
+  - Saving and coming back keeps the folder, the search and the scroll position. The saved row
+    scrolls into view and is briefly tinted.
+- **Settings is a dialog.** It opens in the middle of the window over the dimmed list and cannot
+  be moved; Esc, the cross or a click outside it closes it. It names its five settings and
+  nothing else: the explanations moved to the guide, under a new **Settings** topic, and so did
+  the credit to Espanso's author. What export and import report is shown inside the dialog.
+  Turning start-with-Windows on or off no longer posts a banner (the switch already says so); a
+  failure still does. On a short window the dialog scrolls under a fixed title.
+- **The colours are Windows 11's own**, in light and in dark, and the accent is the one chosen in
+  Windows' settings, in the shade Windows itself uses for that theme.
+- **The title bar uses Mica**, the Windows 11 material that takes a faint tint from the desktop
+  wallpaper. Windows only draws it while the window is active, and a solid-colour desktop gives it
+  nothing to tint with. Versions of Windows older than 11 ignore it.
+- **Fluid hover.** One soft highlight glides from row to row under the pointer instead of each
+  row lighting up and going dark on its own. The same glide runs through the command bar, every
+  menu, the switches in Settings and the topics of the guide. Outlined buttons keep their own
+  hover, because their fill is part of their shape.
+- **Windows' animation effects switch applies to the whole app, live.** With it off, nothing
+  travels, slides or fades, and the change takes effect without restarting. The mouse wheel
+  keeps its short smoothing: Windows keeps that under a separate setting of its own.
 - **Every dialog is the same dialog.** Move, new folder, delete confirmations and the export and
-  import folder pickers share one frame and margin, and one button order: action first, then
-  Cancel, as Windows does it. Their width shrinks with the window. Moving to a folder shows every
-  folder as the same rectangles the library filters with. It used to hide the sixth one behind a
-  scroll bar.
-- **Counts agree with their nouns** in all four languages ("1 expansion", not "1 expansions").
-- **Keyboard focus is visible.** Tab now draws a ring around the focused button, folder, row,
-  switch or segment in both themes. Before, only text boxes showed where the keyboard was.
-- The smallest window is now 620×540 (it was 620×480). With 480 px, a second row of folders
-  pushed the footer off the bottom. At 540, three rows of folders still fit. Anything taller
-  scrolls the whole page instead of cutting it off.
-- **The warning shown before deleting expansions is now drawn inside the app.** It used to be a
+  import folder pickers share one frame, one margin and one button order: action first, then
+  Cancel, as Windows does it. Their width shrinks with the window. The pickers are a list of
+  folders with a check; a new folder is made with **Create**, not **Save**.
+- **The warning shown before deleting expansions is drawn inside the app.** It used to be a
   system dialog, which meant it always looked light even in dark theme and matched nothing else
   on screen. It now follows the theme, lists the expansions **in the same order as the list
   behind it**, folds a long selection into a "Show N more" line instead of running off the edge
   of the window, and hands keyboard focus back where it came from when it closes. There is no
   warning triangle beside the heading, on purpose: Windows 11 does not use one in its own
   dialogs, and the red sentence and the red button already say what kind of question this is.
-- The **Delete** button in that warning is legible in light theme. It used to be nearly
-  invisible.
-- Text being typed into a form survives cancelling that warning.
-- **The accent colour is Windows' own again** (2026-09-25). The new interface had fixed it to a
-  violet, and the code that read the system accent went unused and was removed. It is back: every
-  accent-coloured button, link, chip and ring takes the colour chosen in Windows' settings, in the
-  shade Windows itself uses for that theme.
-- **Darker dark theme.** The background is near black (`#030303`) and cards and controls are
-  `#242424`. The main text is `#E6E6E6` and supporting text is `#C8C8C8`. Hover, pressed and
-  line shades were moved down with them so the steps between them stay the same.
-- **The title bar uses Mica**, the Windows 11 material that takes a faint tint from the desktop
-  wallpaper. Windows only draws it while the window is active, and a solid-colour desktop gives it
-  nothing to tint with, so on such a desktop it looks the same as before. Versions of Windows
-  older than 11 ignore it.
-- **Folders take at most two rows.** Past that, the ones that do not fit wait behind a
-  "**12 more**" chip that opens a list of them with their counts. The folder being viewed always
-  keeps its chip. With thirty folders on the smallest window, the chips used to fill the screen and
-  push the list out of sight. Only folders with a chip can take a dropped expansion; for the rest,
-  there is **Move to folder**.
+  Its **Delete** button is legible in light theme, and text being typed into a form survives
+  cancelling it.
+- **Keyboard focus is visible.** Tab draws a ring around the focused control in both themes.
+  Before, only text boxes showed where the keyboard was.
+- **Counts agree with their nouns** in all four languages ("1 expansion", not "1 expansions").
+- The smallest window is now 620×540 (it was 620×480).
+- The start-up switch reads **Start EspansoManager with Windows**, without "(and Espanso)".
 
 ### Fixed
 
-- **Lines of text of different sizes now share a baseline** instead of being centred on each
-  other (2026-09-25). Folder counts no longer sit higher than the folder name. The
-  Active/Paused word is level with the heading instead of 5 px above it. A closed row's trigger
-  is level with its text. The footer note is level with its links.
-- **"Quick guide", "Back" and the other link-style buttons that start a line** now have their
-  first letter on the page's left edge, like every other line. Before, their invisible button
-  padding put them 14 px further in.
-
 - **Emptying a folder no longer deletes it.** A folder that existed only because of what was in
   it vanished when the last expansion was moved out. Folders like this came from an import or
-  from typing a new name in the editor. The filter then jumped to All without a word. It now
-  stays, empty, like one made with **New folder**.
+  from typing a new name in the editor. It now stays, empty, like one made with **New folder**.
 - **Import no longer counts duplicates as additions.** The folder picker offered "2 will be
   added" when one of them already existed. It now counts only what will really be added. It
   hides folders that would add nothing, and reports what was skipped.
@@ -146,11 +103,10 @@ was published.
   though not on disk, and the draft was lost. Now the editor stays open with the draft intact,
   and the import is undone in the same way.
 - **Hindi buttons were empty boxes.** The Devanagari face was missing from the font family that
-  button labels use. Pause, New expansion, Select, Settings and the rest were illegible. This
-  was already broken in 0.0.1.
-- **The library footer fell off the bottom of the window.** The list height used a guessed header
-  size. It now uses the measured one.
+  button labels use. Pause, New expansion, Settings and the rest were illegible.
 - **Text ran off the right edge** of the welcome screen and the quick guide in narrow windows.
+- **"Back" and the other link-style buttons that start a line** have their first letter on the
+  page's left edge, like every other line. Their invisible padding put them 14 px further in.
 - **A trigger made only of symbols can be created.** `:--`, `:_` and `:—` were refused with
   "the trigger cannot be empty", which was not what had happened: the word box was being read
   as a second prefix, which left no word at all. A word box holding nothing but symbols is now
