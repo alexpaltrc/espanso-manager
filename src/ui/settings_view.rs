@@ -100,16 +100,34 @@ pub fn show(ctx: &egui::Context, state: &mut AppState) {
         if fresh {
             scroll = scroll.vertical_scroll_offset(0.0);
         }
+        // When a note makes the contents taller than the dialog, the bar's column opens and
+        // everything at the right edge makes way for it. egui eases that column in over the
+        // app-wide animation time, a fifth of a second, on a curve that covers half the distance
+        // in the first fifth of it: forty milliseconds, which reads as a jump. The scroll area
+        // reads that time from the global style both before and after it lays out its contents,
+        // so it is lengthened exactly there and put back for the contents in between: the
+        // column opens slowly and the switches inside keep their own pace. Zero stays zero, so
+        // Windows' animation effects turned off still means no motion here either.
+        let normal = ctx.global_style().animation_time;
+        let make_way = if normal > 0.0 { BAR_MAKES_WAY } else { 0.0 };
+        ctx.global_style_mut(|s| s.animation_time = make_way);
         scroll.show(ui, |ui| {
+            ctx.global_style_mut(|s| s.animation_time = normal);
             ui.set_width(ui.available_width());
             sections(ui, state);
+            ctx.global_style_mut(|s| s.animation_time = make_way);
         });
+        ctx.global_style_mut(|s| s.animation_time = normal);
     });
 
     if close || modal.backdrop_response.clicked() {
         state.close_settings();
     }
 }
+
+/// Seconds the scroll bar's column takes to open or close. The curve is egui's, eased out, so
+/// half the way is covered in the first tenth of a second and the rest settles gently.
+const BAR_MAKES_WAY: f32 = 0.5;
 
 /// The title row and the space under it.
 const TITLE_ROW: f32 = controls::FIELD_HEIGHT + controls::GAP_WIDE;
