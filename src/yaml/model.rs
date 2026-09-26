@@ -138,6 +138,18 @@ impl MatchEntry {
         }
     }
 
+    /// The text as the user wrote it, line breaks and all, for the one place that shows it whole
+    /// and copies it. [`preview`](Self::preview) flattens lines because a list row has one; a
+    /// three-line signature read back as one line, and was copied as one, is not the signature.
+    /// Dates and the matches the form cannot edit have no single text to show, so they keep
+    /// their preview.
+    pub fn full_text(&self, t: &'static Strings) -> String {
+        match self {
+            MatchEntry::Simple(m) if m.vars.is_empty() => m.replace.clone(),
+            _ => self.preview(t),
+        }
+    }
+
     /// Whether the simple form can safely rewrite this match's `replace`/`vars` without losing
     /// anything. A plain text match or one of our own date presets qualifies; a match with other
     /// kinds of `vars` (shell commands, clipboard, ...) round-trips fine when left untouched, but
@@ -268,6 +280,15 @@ impl MatchFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_whole_text_keeps_its_lines_and_only_the_preview_flattens_them() {
+        let text = "matches:\n  - trigger: \":sig\"\n    replace: |-\n      Best regards,\n      Jamie\n";
+        let mf = MatchFile::from_str(text).expect("loads");
+        let t = crate::i18n::Lang::En.strings();
+        assert_eq!(mf.entries[0].full_text(t), "Best regards,\nJamie");
+        assert_eq!(mf.entries[0].preview(t), "Best regards, Jamie");
+    }
 
     #[test]
     fn an_empty_matches_key_is_an_empty_file_and_nothing_worse() {

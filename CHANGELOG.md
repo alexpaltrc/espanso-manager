@@ -3,6 +3,13 @@
 All notable changes to EspansoManager. Dates are the day the work was finished, not the day it
 was published.
 
+## Unreleased (0.0.3-dev)
+
+### Fixed
+
+- **The detail beside the list shows the text with its line breaks**, and its copy button copies
+  them. Both used the list's one-line preview, so a three-line signature read, and was copied, as
+  one line.
 ## 0.0.2 — 2026-09-25
 
 What changed since 0.0.1. Designs that were tried along the way and replaced before publishing

@@ -124,9 +124,11 @@ pub fn text_scale(work_height_points: f32) -> f32 {
 /// Shared with `main.rs` so the builder and the on-show repair agree; a minimum enforced in one
 /// place and ignored in the other is how a window ends up too small to use.
 ///
-/// The minimum height is the library's: its title, search, a wrapped second row of folder chips,
-/// one row of the list and the footer, measured on the built window. At 480 the chips' second row
-/// was enough to push the footer off the bottom.
+/// The minimum height is the editor's. Measured on the built window with the minimum lowered: at
+/// 480 the library still shows its title, search and seven rows, but the editor's text box shrinks
+/// to about two lines above Guardar; at 540 it has room for about five. (540 was first chosen for
+/// a second row of folder chips that pushed a footer off the bottom. Both are gone; the number
+/// stays for the editor.)
 pub const DEFAULT_SIZE: [f32; 2] = [1180.0, 780.0];
 pub const MIN_SIZE: [f32; 2] = [620.0, 540.0];
 

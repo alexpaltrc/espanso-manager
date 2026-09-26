@@ -1905,13 +1905,14 @@ fn inspector(ui: &mut egui::Ui, state: &mut AppState, trigger: &str, side: bool,
     let mut delete = false;
 
     // The list's own preview is capped so a multi-kilobyte replacement never costs the list
-    // anything. Here there is exactly one row to look up, so it can show the whole thing.
+    // anything. Here there is exactly one row to look up, so it can show the whole thing — with
+    // its line breaks, which the list's preview turns into spaces.
     let full = state
         .match_file
         .entries
         .iter()
         .find(|e| e.trigger_str() == trigger)
-        .map(|e| e.preview(t));
+        .map(|e| e.full_text(t));
     let folder = state.settings.folder_of(trigger).map(str::to_owned);
     let close_tip = keys::tip(
         studio::text(state, "Cerrar", "Close", "Isara", "बंद करें"),
