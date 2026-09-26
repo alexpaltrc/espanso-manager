@@ -3,10 +3,7 @@
 All notable changes to EspansoManager. Dates are the day the work was finished, not the day it
 was published.
 
-## Unreleased — 0.0.2-dev
-
-Everything below is built and installed locally as `0.0.2-dev`. Nothing here has been published.
-When it is, this heading becomes `## 0.0.2 — <date>` and the `-dev` comes off the version.
+## 0.0.2 — 2026-09-25
 
 ### Added
 

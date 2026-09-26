@@ -359,7 +359,7 @@ fn date_option(
             if padding > 0.0 {
                 ui.add_space(padding);
             }
-            ui.label(sample_text(&sample));
+            ui.label(sample_text(sample));
         }
     });
     if let Some(sample) = sample.as_ref().filter(|_| stack_sample) {

@@ -138,10 +138,12 @@ pub fn render(size: u32, palette: Palette, paused: bool) -> IconData {
                     coverage += 1;
                 }
             }
-            if coverage == 0 { rgba.extend_from_slice(&[0, 0, 0, 0]); }
-            else {
-                for channel in color { rgba.push(((channel + coverage / 2) / coverage) as u8); }
-                rgba.push(((coverage * 255 + 32) / 64) as u8);
+            match coverage {
+                0 => rgba.extend_from_slice(&[0, 0, 0, 0]),
+                _ => {
+                    for channel in color { rgba.push(((channel + coverage / 2) / coverage) as u8); }
+                    rgba.push(((coverage * 255 + 32) / 64) as u8);
+                }
             }
         }
     }
@@ -163,7 +165,7 @@ mod tests {
                 assert_eq!(&paused.rgba[..4], &[0, 0, 0, 0]);
                 assert_ne!(active.rgba, paused.rgba);
                 // State must never change the silhouette/transparency of the shared key.
-                assert!(active.rgba.chunks_exact(4).zip(paused.rgba.chunks_exact(4)).all(|(a, b)| a[3] == b[3]));
+                assert!(active.rgba.as_chunks::<4>().0.iter().zip(paused.rgba.as_chunks::<4>().0).all(|(a, b)| a[3] == b[3]));
                 for (x, y) in [(5.0, 5.25), (5.0, 10.75), (11.5, 8.0)] {
                     let x = (x * size as f32 / 16.0) as usize;
                     let y = (y * size as f32 / 16.0) as usize;

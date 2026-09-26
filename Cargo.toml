@@ -2,7 +2,7 @@
 name = "espanso_manager"
 # While a version is being built it carries `-dev`: 0.0.2-dev is the work towards 0.0.2. The
 # suffix comes off in the commit that publishes it, and that commit gets the `v0.0.2` tag.
-version = "0.0.2-dev"
+version = "0.0.2"
 edition = "2021"
 authors = ["Alex Palacios"]
 # `-or-later` and not plain `GPL-3.0`, because that is what the header at the top of every

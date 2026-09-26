@@ -114,7 +114,9 @@ fn weight(wght: f32) -> egui::FontTweak {
 fn cached_bytes(path: &'static str) -> Option<&'static [u8]> {
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
-    static READ: OnceLock<Mutex<HashMap<&'static str, Option<&'static [u8]>>>> = OnceLock::new();
+    /// Each path, and what reading it gave: the bytes, or None for a face this machine lacks.
+    type Read = HashMap<&'static str, Option<&'static [u8]>>;
+    static READ: OnceLock<Mutex<Read>> = OnceLock::new();
     let mut read = READ.get_or_init(Default::default).lock().ok()?;
     *read.entry(path).or_insert_with(|| {
         std::fs::read(path)

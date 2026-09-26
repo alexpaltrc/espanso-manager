@@ -124,6 +124,8 @@ pub enum View {
     FolderOptions(String),
 }
 
+// Every kind is a deletion, which is exactly what the name of each one should say out loud.
+#[allow(clippy::enum_variant_names)]
 pub enum PendingConfirmKind {
     /// One expansion, carrying the row index rather than only the trigger. The row is what was
     /// clicked, and a hand-edited `base.yml` can hold two entries with the same trigger, which
@@ -1703,7 +1705,7 @@ fn apply_motion(ctx: &egui::Context) {
     ctx.all_styles_mut(|style| {
         style.animation_time = if on { defaults.animation_time } else { 0.0 };
         style.scroll_animation = if on {
-            defaults.scroll_animation.clone()
+            defaults.scroll_animation
         } else {
             egui::style::ScrollAnimation::none()
         };

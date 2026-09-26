@@ -77,7 +77,7 @@ fn same_exe(registered: &Path, ours: &Path) -> bool {
 /// `02`/`06` mean enabled, `03`/`07` disabled. No record at all is the ordinary case and means
 /// enabled — nobody has ever turned this entry off.
 fn approved(record: Option<&[u8]>) -> bool {
-    record.map_or(true, |bytes| bytes.first().is_none_or(|flags| flags & 1 == 0))
+    record.is_none_or(|bytes| bytes.first().is_none_or(|flags| flags & 1 == 0))
 }
 
 fn is_approved() -> bool {

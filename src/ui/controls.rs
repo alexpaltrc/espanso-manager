@@ -1066,6 +1066,9 @@ pub fn check_line(
     menu_line(ui, None, label, trailing, Tone::Normal, true, checked, false)
 }
 
+// The one private body behind the public menu-line helpers, each of which passes a fixed handful
+// of these; bundling them into a struct would only move the list somewhere else.
+#[allow(clippy::too_many_arguments)]
 fn menu_line(
     ui: &mut egui::Ui,
     glyph: Option<Glyph>,

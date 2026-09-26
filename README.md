@@ -7,7 +7,7 @@
 ![Windows](https://img.shields.io/badge/Windows-0078D4?logo=windows&logoColor=white)
 ![Rust](https://img.shields.io/badge/Rust-1.98-CE422B?logo=rust&logoColor=white)
 ![egui](https://img.shields.io/badge/egui-0.36-7B68EE)
-![Version](https://img.shields.io/badge/version-0.0.1-blue)
+![Version](https://img.shields.io/badge/version-0.0.2-blue)
 ![License](https://img.shields.io/badge/license-GPL--3.0-blue)
 ![Portable](https://img.shields.io/badge/portable-no%20installer-2EA043)
 ![Free](https://img.shields.io/badge/free-forever-2EA043)
@@ -15,7 +15,7 @@
 
 **Free forever. No account, nothing sent anywhere.**
 
-### [⬇️ Download for Windows](https://github.com/alexpaltrc/espanso-manager/releases/download/v0.0.1/EspansoManager-Portable-0.0.1.zip)
+### [⬇️ Download for Windows](https://github.com/alexpaltrc/espanso-manager/releases/download/v0.0.2/EspansoManager-Portable-0.0.2.zip)
 
 <sub>10 MB · espanso is in the box · nothing gets installed · unzip and open `EspansoManager.exe`</sub>
 
