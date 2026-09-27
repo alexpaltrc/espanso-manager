@@ -10,6 +10,11 @@ was published.
 - **The detail beside the list shows the text with its line breaks**, and its copy button copies
   them. Both used the list's one-line preview, so a three-line signature read, and was copied, as
   one line.
+- **Starting with Windows starts hidden in the tray**, as it was always meant to. The start-up
+  entry asked for it, but the window was being shown anyway right after it first drew itself,
+  so it opened at every login. Now only the tray icon appears, and a click on it opens the
+  window.
+
 ## 0.0.2 — 2026-09-25
 
 What changed since 0.0.1. Designs that were tried along the way and replaced before publishing

@@ -155,7 +155,7 @@ executable's own directory, which is the older layout where the two executables 
 side, so dropping a new binary into an existing folder keeps working.
 
 ```sh
-cargo test                            # 75 tests
+cargo test                            # 76 tests
 cargo clippy --release --all-targets
 ```
 

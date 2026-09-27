@@ -1974,6 +1974,26 @@ fn hwnd_of(window: &winit::window::Window) -> Option<windows::Win32::Foundation:
     }
 }
 
+/// Whether the compositor draws the window at all, independently of whether Windows counts it as
+/// shown. A cloaked window that is shown puts nothing on screen, which is the one way to let
+/// eframe show a window that has to stay hidden.
+fn set_cloaked(window: &winit::window::Window, cloaked: bool) {
+    use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_CLOAK};
+    let Some(hwnd) = hwnd_of(window) else {
+        return;
+    };
+    // A Win32 BOOL, which is an i32.
+    let value = i32::from(cloaked);
+    unsafe {
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_CLOAK,
+            (&value as *const i32).cast(),
+            std::mem::size_of::<i32>() as u32,
+        );
+    }
+}
+
 /// The work area the window should be measured against: the monitor it is on, falling back to the
 /// primary one only when that cannot be determined.
 fn work_area_for(window: &winit::window::Window) -> Option<crate::display::WorkArea> {
@@ -2323,6 +2343,8 @@ impl EspansoManagerApp {
         let Some(window) = &self.window else {
             return;
         };
+        // Only ever set by a start hidden in the tray; clearing it is harmless every other time.
+        set_cloaked(window, false);
         window.set_visible(true);
         if let Some(area) = work_area_for(window) {
             fit_window_to(window, area);
@@ -2715,9 +2737,18 @@ pub fn infobar(ui: &mut egui::Ui, banner: &Banner, t: &Strings) -> (bool, bool) 
 
 impl eframe::App for EspansoManagerApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // `with_visible(false)` in main.rs is not enough on its own: eframe shows the root window
+        // after painting its first frame whatever the builder said (`post_rendering`, eframe
+        // 0.36.1), which is after this runs. So the window is cloaked before that frame reaches
+        // the screen, and the hide goes out as a viewport command, which eframe applies after its
+        // own show. Hiding it directly here, as this used to, was undone a moment later: starting
+        // with Windows opened the window at every login.
         if self.start_hidden_pending {
             self.start_hidden_pending = false;
-            self.hide_to_tray();
+            if let Some(window) = &self.window {
+                set_cloaked(window, true);
+            }
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
         }
 
         self.drain_tray_events();
