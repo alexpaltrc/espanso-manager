@@ -17,7 +17,8 @@ was published.
   when it is slow, right as the list scrolls to the saved row. The window now says what was
   saved at once and carries on; only a restart that fails comes back to say so, under what was
   saved. Pause and Quit wait for a restart under way, so neither can reach an espanso that is
-  being replaced.
+  being replaced. Measured against the real espanso: each save froze the window for 764–797 ms
+  in 0.0.2, and for 5–64 ms now.
 - Applying a folder's prefix to its expansions reports a failed restart under the count of
   what was changed, as every other save does, instead of in its place.
 - **Every question to espanso is answered in half the time**: start-up, pause and resume, and
