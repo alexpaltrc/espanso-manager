@@ -5,6 +5,14 @@ was published.
 
 ## Unreleased (0.0.3-dev)
 
+### Changed
+
+- **Moving the pointer over the list, and scrolling it, costs about a third of the processor it
+  did.** Each frame used to wait for the monitor inside the graphics driver, which on NVIDIA
+  keeps a core busy the whole time it waits. It now waits for Windows' compositor instead, which
+  costs nothing while waiting. Measured on a 200 Hz monitor: 70–100 % of a core down to 32–43 %
+  while hovering, 111–114 % down to 33–42 % while scrolling, with the same 200 frames a second.
+
 ### Fixed
 
 - **The detail beside the list shows the text with its line breaks**, and its copy button copies

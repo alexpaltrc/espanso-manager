@@ -2108,6 +2108,8 @@ pub struct EspansoManagerApp {
     /// Set by the tray's Quit item. The window's close handler normally cancels the close and hides
     /// to the tray instead; this is what tells it that this particular close is meant.
     quitting: bool,
+    /// Holds each visible frame until the compositor's next pass. See [`crate::pacing`].
+    pacer: crate::pacing::Pacer,
 }
 
 pub struct StartupContext {
@@ -2307,6 +2309,7 @@ impl EspansoManagerApp {
             last_icon_dpi,
             start_hidden_pending: ctx.start_hidden,
             quitting: false,
+            pacer: Default::default(),
         }
     }
 
@@ -2737,6 +2740,10 @@ pub fn infobar(ui: &mut egui::Ui, banner: &Banner, t: &Strings) -> (bool, bool) 
 
 impl eframe::App for EspansoManagerApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.window.as_ref().and_then(|w| w.is_visible()).unwrap_or(true) {
+            self.pacer.wait_for_compositor();
+        }
+
         // `with_visible(false)` in main.rs is not enough on its own: eframe shows the root window
         // after painting its first frame whatever the builder said (`post_rendering`, eframe
         // 0.36.1), which is after this runs. So the window is cloaked before that frame reaches

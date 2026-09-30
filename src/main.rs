@@ -50,6 +50,7 @@ mod folders;
 mod hotkey;
 mod i18n;
 mod icons;
+mod pacing;
 mod settings;
 mod sysevents;
 mod theme;
@@ -360,6 +361,9 @@ fn main() {
         // "everything lives in this one portable folder" promise. Keep it inside our own state
         // folder instead.
         persistence_path: Some(manager_dir.join("ui_state.ron")),
+        // The swap does not wait for the monitor; each frame waits for the compositor instead, in
+        // `pacing`, which costs the processor nothing while it waits. See that module for why.
+        glow_options: eframe::egui_glow::GlowConfiguration { vsync: false, ..Default::default() },
         ..Default::default()
     };
 
