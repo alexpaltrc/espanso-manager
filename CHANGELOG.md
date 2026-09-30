@@ -20,6 +20,10 @@ was published.
   being replaced.
 - Applying a folder's prefix to its expansions reports a failed restart under the count of
   what was changed, as every other save does, instead of in its place.
+- **Every question to espanso is answered in half the time**: start-up, pause and resume, and
+  the check after a restart. The app looked for espanso's answer every 30 ms and, because
+  Windows rounds that up, usually saw it on the second look. It is now woken by the answer
+  itself: a status check went from 67 ms to 37–39 ms, measured against the real espanso.
 
 ### Fixed
 

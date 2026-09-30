@@ -41,10 +41,13 @@
 
 use crate::i18n::{fill, Strings};
 use std::io::Read;
+use std::os::windows::io::AsRawHandle;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
+use windows::Win32::Foundation::HANDLE;
+use windows::Win32::System::Threading::WaitForSingleObject;
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
@@ -211,12 +214,19 @@ impl EspansoCtl {
                     stderr,
                 });
             }
-            if Instant::now() >= deadline {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
                 let _ = child.kill();
                 let _ = child.wait();
                 return Ok(timed_out(t));
             }
-            std::thread::sleep(Duration::from_millis(30));
+            // Woken by the child's exit itself, not by a clock. This used to sleep 30 ms between
+            // looks, and Windows rounds a sleep up to its 15.6 ms tick, so a command that took
+            // 35 ms was seen at the second look: a `service status` measured 67 ms, most of it
+            // waiting to notice. Now 37–39.
+            let handle = HANDLE(child.as_raw_handle());
+            let millis = left.as_millis().clamp(1, u32::MAX as u128 - 1) as u32;
+            unsafe { WaitForSingleObject(handle, millis) };
         }
     }
 
@@ -448,3 +458,4 @@ impl EspansoCtl {
         }
     }
 }
+
