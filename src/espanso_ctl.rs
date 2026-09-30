@@ -25,9 +25,10 @@
 //! `\.\pipe\espansoworkerv2`, which saves the ~50 ms of starting a process.
 //!
 //! **Every function here blocks the thread that calls it, and that thread is the one drawing the
-//! interface.** So nothing runs without a deadline: `CTL_TIMEOUT` caps a single call, and the
-//! waiting loops carve each poll out of the caller's remaining budget rather than starting a fresh
-//! four seconds every time round. A six-second wait that actually spent 8.4 is the bug that shape
+//! interface** — all but the restart after a save, which `reload` runs on a thread of its own. So
+//! nothing runs without a deadline: `CTL_TIMEOUT` caps a single call, and the waiting loops carve
+//! each poll out of the caller's remaining budget rather than starting a fresh four seconds every
+//! time round. A six-second wait that actually spent 8.4 is the bug that shape
 //! produces, and it was measured, not imagined.
 //!
 //! For the same reason, anything asked here at start-up is paid for before the first frame exists.

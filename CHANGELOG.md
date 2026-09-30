@@ -12,6 +12,14 @@ was published.
   keeps a core busy the whole time it waits. It now waits for Windows' compositor instead, which
   costs nothing while waiting. Measured on a 200 Hz monitor: 70–100 % of a core down to 32–43 %
   while hovering, 111–114 % down to 33–42 % while scrolling, with the same 200 frames a second.
+- **Saving no longer freezes the window.** Espanso is restarted after every save so it picks up
+  the change, and the window used to stop until it was back: half a second at best, up to six
+  when it is slow, right as the list scrolls to the saved row. The window now says what was
+  saved at once and carries on; only a restart that fails comes back to say so, under what was
+  saved. Pause and Quit wait for a restart under way, so neither can reach an espanso that is
+  being replaced.
+- Applying a folder's prefix to its expansions reports a failed restart under the count of
+  what was changed, as every other save does, instead of in its place.
 
 ### Fixed
 

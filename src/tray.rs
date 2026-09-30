@@ -75,10 +75,17 @@ pub struct TrayEvents {
 /// that nobody watching decides the menu item did nothing.
 const QUIT_GRACE: Duration = Duration::from_millis(800);
 
+/// The most Quit will wait for a restart already under way. A restart gives up on its own after
+/// about six and a half seconds (`restart_and_confirm`), so this is only ever reached by one that
+/// was not coming back anyway; the normal wait is the half second a restart takes.
+const RELOAD_WAIT: Duration = Duration::from_secs(7);
+
 /// Everything the menu pump needs to end the program without the window's help.
 pub struct QuitPlan {
     pub id: MenuId,
     pub ctl: EspansoCtl,
+    /// Asked to finish first: see `reload`.
+    pub reload: crate::reload::Reloader,
 }
 
 /// Ends the program. Runs on the pump thread, so it does not depend on a frame ever being drawn.
@@ -94,6 +101,11 @@ pub struct QuitPlan {
 /// program. Espanso is stopped here, where nothing can skip it, and the process ends here too.
 fn finish_quit(quit: &QuitPlan) {
     let started = Instant::now();
+
+    // A stop that overtook a restart in flight would be undone by it, and espanso would carry on
+    // with no icon. The window has already been asked to close, so waiting here costs nothing but
+    // the tray icon staying up a moment longer.
+    quit.reload.close(RELOAD_WAIT);
 
     // Espanso goes down with the manager. Its own tray icon is switched off on our behalf, so a
     // daemon left running would keep expanding text with nothing on screen to pause it or explain

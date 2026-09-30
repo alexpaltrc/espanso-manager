@@ -380,6 +380,11 @@ pub struct AppState {
     /// waiting on it, and a view that could do that would be a view that writes to disk. The flag
     /// keeps the rule intact — every mutation goes through `AppState` or through the app itself.
     pub pause_toggle_requested: bool,
+    /// Restarts espanso after a save without holding up the window. See `reload`.
+    pub reload: crate::reload::Reloader,
+    /// What the banner already said about the last save — its first line and any warning — so a
+    /// restart that fails can be reported under it rather than instead of it.
+    reload_note: Option<(String, Option<String>)>,
     /// (original name, current edit buffer) while a folder's name is being edited inline.
     pub renaming_folder: Option<(String, String)>,
     pub pending_confirm: Option<PendingConfirm>,
@@ -1233,15 +1238,7 @@ impl AppState {
         self.touch_list();
         let t = self.t();
         let message = crate::i18n::fill_count(t.prefix_applied, changes.len(), &[]);
-        let restarted = self.ctl.restart_and_confirm(Duration::from_secs(6), t);
-        self.espanso_confirmed = restarted.is_ok();
-        match restarted {
-            Ok(()) => {
-                if let Some(warning) = warnings.message(t) { self.set_error_banner(format!("{message}\n{warning}")); }
-                else { self.set_info_banner(message); }
-            }
-            Err(error) => self.set_error_banner(error),
-        }
+        self.announce_and_reload(message, warnings.message(t));
     }
 
     /// Writes the expansions the list shows out to a file the user picks.
@@ -1482,9 +1479,9 @@ impl AppState {
         }
     }
 
-    /// Writes `base.yml` and restarts espanso, then says how it went. Returns whether the file was
-    /// written — a failed restart after a good write still counts, because the change is on disk
-    /// and will be picked up by the next espanso that starts.
+    /// Writes `base.yml`, says so, and has espanso restarted behind it. Returns whether the file was
+    /// written — a restart that later fails does not undo that, because the change is on disk and
+    /// will be picked up by the next espanso that starts.
     fn save_and_reload(&mut self, success_message: impl Into<String>) -> bool {
         // The model never came from disk. Writing it back would put an empty file where one we
         // could not read used to be, and every expansion in it would be gone from espanso. Say so
@@ -1496,30 +1493,45 @@ impl AppState {
         let t = self.t();
         match yaml_io::save(&self.match_file_path, &self.match_file, &self.backups_dir) {
             Ok(warnings) => {
-                let message = success_message.into();
-                let outcome = self.ctl.restart_and_confirm(Duration::from_secs(6), t);
-                self.espanso_confirmed = outcome.is_ok();
-                // The edit is on disk either way, so the first line still says what was done —
-                // "1 añadida, 1 omitida" is the answer to what the user asked, and a failed
-                // restart used to replace it outright. What follows is what is not in place
-                // under it, which is worth the red banner, because the moment it matters is the
-                // moment nobody is looking.
-                match (outcome, warnings.message(t)) {
-                    (Ok(()), None) => self.set_info_banner(message),
-                    (Ok(()), Some(warning)) => {
-                        self.set_error_banner(format!("{message}\n\n{warning}"))
-                    }
-                    (Err(e), None) => self.set_error_banner(format!("{message}\n\n{e}")),
-                    (Err(e), Some(warning)) => {
-                        self.set_error_banner(format!("{message}\n\n{e}\n\n{warning}"))
-                    }
-                }
+                self.announce_and_reload(success_message.into(), warnings.message(t));
                 true
             }
             Err(e) => {
                 self.set_error_banner(e.friendly_message(t));
                 false
             }
+        }
+    }
+
+    /// Says what a write did, then has espanso pick it up — without waiting for it to.
+    ///
+    /// The edit is on disk either way, so the first line always says what was done: "1 añadida, 1
+    /// omitida" is the answer to what the user asked, and a failed restart used to replace it
+    /// outright. A warning goes under it, and so, later, does a restart that failed
+    /// ([`collect_reload`](Self::collect_reload)) — worth the red banner, because the moment it
+    /// matters is the moment nobody is looking.
+    fn announce_and_reload(&mut self, message: String, warning: Option<String>) {
+        match &warning {
+            None => self.set_info_banner(message.clone()),
+            Some(warning) => self.set_error_banner(format!("{message}\n\n{warning}")),
+        }
+        self.reload_note = Some((message, warning));
+        self.reload.request(self.t());
+    }
+
+    /// Picks up how the last restart went, once it has. Called every frame; costs a lock.
+    pub fn collect_reload(&mut self) {
+        let Some(outcome) = self.reload.take_outcome() else {
+            return;
+        };
+        self.espanso_confirmed = outcome.is_ok();
+        let note = self.reload_note.take();
+        if let Err(e) = outcome {
+            self.set_error_banner(match note {
+                Some((message, None)) => format!("{message}\n\n{e}"),
+                Some((message, Some(warning))) => format!("{message}\n\n{e}\n\n{warning}"),
+                None => e,
+            });
         }
     }
 }
@@ -2110,6 +2122,8 @@ pub struct EspansoManagerApp {
     quitting: bool,
     /// Holds each visible frame until the compositor's next pass. See [`crate::pacing`].
     pacer: crate::pacing::Pacer,
+    /// Pause and resume picked from the tray while espanso was restarting, kept until it is back.
+    held_menu: Vec<tray_icon::menu::MenuId>,
 }
 
 pub struct StartupContext {
@@ -2213,6 +2227,15 @@ impl EspansoManagerApp {
             None
         };
 
+        // Shared with Quit, which must not stop espanso under a restart that is still running.
+        let reload = {
+            let ctl = ctx.ctl.clone();
+            let wake = cc.egui_ctx.clone();
+            crate::reload::Reloader::new(
+                move |t| ctl.restart_and_confirm(Duration::from_secs(6), t),
+                move || wake.request_repaint(),
+            )
+        };
         // Built before the tray is handed over to the app: the pump has to recognise the Quit item
         // by its own id, so that it can end the program without waiting for a frame that, hidden in
         // the tray, may never come.
@@ -2221,6 +2244,7 @@ impl EspansoManagerApp {
             crate::tray::QuitPlan {
                 id: ctx.tray.quit_id(),
                 ctl: ctx.ctl.clone(),
+                reload: reload.clone(),
             },
         );
 
@@ -2246,6 +2270,8 @@ impl EspansoManagerApp {
             paused: false,
             espanso_confirmed: ctx.espanso_confirmed,
             pause_toggle_requested: false,
+            reload,
+            reload_note: None,
             renaming_folder: None,
             pending_confirm: None,
             pending_transfer: None,
@@ -2310,6 +2336,7 @@ impl EspansoManagerApp {
             start_hidden_pending: ctx.start_hidden,
             quitting: false,
             pacer: Default::default(),
+            held_menu: Vec::new(),
         }
     }
 
@@ -2550,7 +2577,15 @@ impl EspansoManagerApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                 return;
             }
-            match self.tray.handle_menu_id(&event.id, &self.state.ctl, t) {
+            self.held_menu.push(event.id);
+        }
+        // A pause sent now would reach a daemon that is on its way out, or none at all. It waits;
+        // the restart wakes a frame when it is done.
+        if self.state.reload.busy() {
+            return;
+        }
+        for id in std::mem::take(&mut self.held_menu) {
+            match self.tray.handle_menu_id(&id, &self.state.ctl, t) {
                 Some(Ok(())) => self.state.espanso_confirmed = true,
                 Some(Err(message)) => {
                     self.state.espanso_confirmed = false;
@@ -2763,13 +2798,17 @@ impl eframe::App for EspansoManagerApp {
         self.poll_hotkey();
         self.show_search_window(ctx);
 
-        match self.tray.tick(&self.state.ctl, self.state.t()) {
-            Some(Ok(())) => self.state.espanso_confirmed = true,
-            Some(Err(message)) => {
-                self.state.espanso_confirmed = false;
-                self.state.set_error_banner(message);
+        self.state.collect_reload();
+        // The end of a timed pause waits for a restart in flight, like every other pause.
+        if !self.state.reload.busy() {
+            match self.tray.tick(&self.state.ctl, self.state.t()) {
+                Some(Ok(())) => self.state.espanso_confirmed = true,
+                Some(Err(message)) => {
+                    self.state.espanso_confirmed = false;
+                    self.state.set_error_banner(message);
+                }
+                None => {}
             }
-            None => {}
         }
 
         // Settings changes that need more than `AppState` to take effect are applied here, once,
@@ -2897,7 +2936,8 @@ impl eframe::App for EspansoManagerApp {
         ui::settings_view::show_folder_picker(ui.ctx(), &mut self.state);
         ui::glide::end_frame(ui.ctx());
 
-        if std::mem::take(&mut self.state.pause_toggle_requested) {
+        // Left set while espanso restarts: see `drain_menu_events`.
+        if !self.state.reload.busy() && std::mem::take(&mut self.state.pause_toggle_requested) {
             let t = self.state.t();
             let toggled = self.tray.toggle(&self.state.ctl, t);
             self.state.espanso_confirmed = toggled.is_ok();

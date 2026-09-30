@@ -51,6 +51,7 @@ mod hotkey;
 mod i18n;
 mod icons;
 mod pacing;
+mod reload;
 mod settings;
 mod sysevents;
 mod theme;
