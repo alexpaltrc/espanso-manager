@@ -1597,15 +1597,23 @@ fn show_row(
     // observable effect — and with a few thousand expansions in a single flat list, that work was
     // the entire cost of a scroll. The height is not guessed: it is measured from rows that *were*
     // drawn, in this same density, so the gap is the exact size of the thing it stands in for and
-    // the scrollbar stays truthful. Before the first row has ever been measured, everything is
-    // drawn normally, so the list can never be wrong — only, for one frame, slower.
+    // the scrollbar stays truthful. Until a row has been measured, rows are drawn normally, so the
+    // list can never be wrong.
     //
     // The band kept either side of the viewport means a row is already laid out by the time it
     // scrolls into view. A row being dragged is always drawn wherever it is, and so are the chosen
     // row — the arrows may have just moved the choice off screen, and it has to scroll itself back
     // — the one Tab stops on, and the one saved a moment ago, which asks to be scrolled into view.
+    //
+    // "Until a row has been measured" means a row of this very frame, not of an earlier one. Waiting
+    // for the next frame to use a height measured in this one used to lay out every row of the
+    // list on the first frame of every start: with 2,000 expansions, 75 MB taken and given back
+    // before the window had even been shown.
+    let known_height = pass.known_height.or_else(|| {
+        ui.ctx().data(|d| d.get_temp::<f32>(row_height_key(pass.compact, pass.select_mode)))
+    });
     if !dragging && !is_open && !flashed && !focusable {
-        if let Some(height) = pass.known_height {
+        if let Some(height) = known_height {
             let top = ui.cursor().top();
             let view = ui.clip_rect();
             let band = height * 3.0;

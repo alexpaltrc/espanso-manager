@@ -24,6 +24,10 @@ was published.
   the check after a restart. The app looked for espanso's answer every 30 ms and, because
   Windows rounds that up, usually saw it on the second look. It is now woken by the answer
   itself: a status check went from 67 ms to 37–39 ms, measured against the real espanso.
+- **Opening a long list no longer takes 75 MB for a moment.** The list only lays out the rows
+  near the screen, but on the first frame of every start it laid out all of them, because it
+  waited a frame to use the height it had just measured. With 2,000 expansions, the peak at
+  start-up went from 140 MB to about 90.
 
 ### Fixed
 
