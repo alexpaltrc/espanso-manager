@@ -28,6 +28,9 @@ was published.
   near the screen, but on the first frame of every start it laid out all of them, because it
   waited a frame to use the height it had just measured. With 2,000 expansions, the peak at
   start-up went from 140 MB to about 90.
+- **The fonts no longer take memory of the app's own.** Each face used to be copied whole into
+  the app; it is now read straight from the Windows file, whose pages are shared with every
+  other program drawing in Segoe UI. 5 MB less of the app's own memory, 10 MB in Hindi.
 
 ### Fixed
 

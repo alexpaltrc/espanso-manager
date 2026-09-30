@@ -51,7 +51,7 @@ tray-icon = "0.24.2"
 # `CreateMutexW`, the single-instance guard, is gated behind it because its first argument is a
 # `SECURITY_ATTRIBUTES` pointer, and we pass `None`. Removing it does not shrink anything, it
 # stops the crate compiling.
-windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_Security", "Win32_System_LibraryLoader", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm", "Win32_System_SystemInformation", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Accessibility"] }
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_Threading", "Win32_Security", "Win32_System_LibraryLoader", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm", "Win32_System_Memory", "Win32_System_SystemInformation", "Win32_UI_HiDpi", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Accessibility"] }
 winit = { version = "0.30", default-features = false }
 winreg = "0.56.0"
 

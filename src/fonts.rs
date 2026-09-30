@@ -28,8 +28,9 @@
 //! own family — see [`install`].
 //!
 //! Called again on every language change, which is the moment the Devanagari face is picked up or
-//! let go: it is 5.3 MB held for the life of the process, on a program that sits in the tray all
-//! day, so it is loaded only when Hindi is actually the chosen language.
+//! let go: it is 5.3 MB, mapped for the life of the process once it has been opened, on a program
+//! that sits in the tray all day, so it is loaded only when Hindi is actually the chosen language.
+//! Every face is mapped rather than copied — see [`map_read_only`].
 
 use eframe::egui;
 
@@ -37,8 +38,8 @@ use eframe::egui;
 /// row of empty boxes would leave exactly the people who need that option unable to recognise it.
 /// Windows ships Nirmala UI as a font *collection*; face 0 covers Devanagari and Latin both.
 ///
-/// Loaded only when Hindi is the chosen language: Nirmala.ttc is 5.3 MB, it is held for the life of
-/// the process, and this app sits in the tray all day on machines that will never draw a single
+/// Loaded only when Hindi is the chosen language: Nirmala.ttc is 5.3 MB, it stays mapped for the
+/// life of the process, and this app sits in the tray all day on machines that will never draw a single
 /// Devanagari character. [`crate::i18n::Lang::picker_label`] is what makes that affordable — it
 /// spells the language in Latin whenever the glyphs are not there to spell it properly.
 const DEVANAGARI: &[&str] = &[
@@ -106,23 +107,62 @@ fn weight(wght: f32) -> egui::FontTweak {
     }
 }
 
-/// A system font's bytes, read once for the life of the process.
+/// A system font's bytes, opened once for the life of the process.
 ///
 /// [`install`] runs again on every language change, and every face it installs used to be read off
 /// the disk and copied into a fresh buffer each time. These files never change under a running
-/// program, so each is read once and kept; the weights of the variable face then share one copy.
+/// program, so each is opened once and kept; the weights of the variable face then share one copy.
 fn cached_bytes(path: &'static str) -> Option<&'static [u8]> {
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
-    /// Each path, and what reading it gave: the bytes, or None for a face this machine lacks.
+    /// Each path, and what opening it gave: the bytes, or None for a face this machine lacks.
     type Read = HashMap<&'static str, Option<&'static [u8]>>;
     static READ: OnceLock<Mutex<Read>> = OnceLock::new();
     let mut read = READ.get_or_init(Default::default).lock().ok()?;
     *read.entry(path).or_insert_with(|| {
-        std::fs::read(path)
-            .ok()
-            .map(|bytes| &*Box::leak(bytes.into_boxed_slice()))
+        map_read_only(path).or_else(|| {
+            std::fs::read(path)
+                .ok()
+                .map(|bytes| &*Box::leak(bytes.into_boxed_slice()))
+        })
     })
+}
+
+/// The file mapped into memory rather than copied into it, and never unmapped.
+///
+/// Copied, every face was the process's own memory, all of it, whether a glyph from it was ever
+/// drawn or not: 5 MB of a program that sits in the tray all day, 10 in Hindi. Mapped, its pages
+/// belong to the file — the same ones Windows already holds for every other program drawing in
+/// Segoe UI — and only the tables and outlines egui actually reads are brought in at all.
+///
+/// `None` sends the caller back to reading the file, which is what this used to do.
+fn map_read_only(path: &str) -> Option<&'static [u8]> {
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows::Win32::System::Memory::{
+        CreateFileMappingW, MapViewOfFile, FILE_MAP_READ, PAGE_READONLY,
+    };
+    use windows::core::PCWSTR;
+
+    let file = std::fs::File::open(path).ok()?;
+    let len = usize::try_from(file.metadata().ok()?.len()).ok()?;
+    // An empty file cannot be mapped, and is not a font either.
+    if len == 0 {
+        return None;
+    }
+    let mapping = unsafe {
+        CreateFileMappingW(HANDLE(file.as_raw_handle()), None, PAGE_READONLY, 0, 0, PCWSTR::null())
+    }
+    .ok()?;
+    let view = unsafe { MapViewOfFile(mapping, FILE_MAP_READ, 0, 0, 0) };
+    // The view keeps the mapping, and the mapping the file, alive: neither handle is needed now.
+    let _ = unsafe { CloseHandle(mapping) };
+    if view.Value.is_null() {
+        return None;
+    }
+    // SAFETY: a read-only view of `len` bytes that is never unmapped, so it outlives every
+    // borrower. While a view is open Windows refuses to truncate the file under it.
+    Some(unsafe { std::slice::from_raw_parts(view.Value as *const u8, len) })
 }
 
 /// The family for the interface's own icons. See [`ICONS`].
@@ -338,13 +378,13 @@ enum Place {
 ///
 /// Both families every time, because a trigger is monospaced and its replacement is not, and
 /// either may contain anything at all.
-fn add_face(fonts: &mut egui::FontDefinitions, candidates: &[&str], place: Place) -> bool {
+fn add_face(fonts: &mut egui::FontDefinitions, candidates: &[&'static str], place: Place) -> bool {
     let Some((name, bytes)) = load_first_available(candidates) else {
         return false;
     };
     fonts.font_data.insert(
         name.clone(),
-        std::sync::Arc::new(egui::FontData::from_owned(bytes)),
+        std::sync::Arc::new(egui::FontData::from_static(bytes)),
     );
     // A `Place::Last` face goes into the icon family as well. That family exists to keep Segoe UI
     // Symbol from winning the pencil — see [`install`] — not to keep whole *scripts* out, and a face
@@ -374,9 +414,9 @@ fn add_face(fonts: &mut egui::FontDefinitions, candidates: &[&str], place: Place
     true
 }
 
-fn load_first_available(paths: &[&str]) -> Option<(String, Vec<u8>)> {
+fn load_first_available(paths: &[&'static str]) -> Option<(String, &'static [u8])> {
     for path in paths {
-        if let Ok(bytes) = std::fs::read(path) {
+        if let Some(bytes) = cached_bytes(path) {
             let name = std::path::Path::new(path)
                 .file_stem()
                 .map(|s| s.to_string_lossy().to_string())
