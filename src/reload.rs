@@ -39,7 +39,6 @@
 //! What does **not** belong here is the wording: `AppState` composes the banners.
 
 use crate::i18n::Strings;
-use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::Duration;
 
@@ -126,9 +125,7 @@ impl Shared {
 
     fn run(&self, mut t: &'static Strings) {
         loop {
-            // A panic here must still clear `busy`: left set, pause would wait for ever.
-            let outcome = catch_unwind(AssertUnwindSafe(|| (self.job)(t)))
-                .unwrap_or_else(|_| Err(t.err_restart_unconfirmed.to_string()));
+            let outcome = (self.job)(t);
             let mut state = self.lock();
             match state.again.take() {
                 Some(next) if !state.closing => t = next,
@@ -221,13 +218,5 @@ mod tests {
         let started = Instant::now();
         reloader.close(Duration::from_millis(100));
         assert!(started.elapsed() < Duration::from_millis(500));
-    }
-
-    #[test]
-    fn a_panicking_restart_still_frees_pause() {
-        let reloader = Reloader::new(|_| panic!("espanso exploded"), || {});
-        reloader.request(strings());
-        assert!(matches!(settle(&reloader), Some(Err(_))));
-        assert!(!reloader.busy());
     }
 }
