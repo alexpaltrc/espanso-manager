@@ -2124,7 +2124,13 @@ pub struct EspansoManagerApp {
     pacer: crate::pacing::Pacer,
     /// Pause and resume picked from the tray while espanso was restarting, kept until it is back.
     held_menu: Vec<tray_icon::menu::MenuId>,
+    /// The theme `sync_title_bar` last put on the title bar itself, and when.
+    title_bar_set: Option<(winit::window::Theme, Instant)>,
 }
+
+/// How long a correction of the title bar's theme stands before `sync_title_bar` makes it again.
+/// See there for why it has to be made more than once.
+const TITLE_BAR_RECHECK: Duration = Duration::from_millis(250);
 
 pub struct StartupContext {
     pub match_file: MatchFile,
@@ -2337,6 +2343,7 @@ impl EspansoManagerApp {
             quitting: false,
             pacer: Default::default(),
             held_menu: Vec::new(),
+            title_bar_set: None,
         }
     }
 
@@ -2602,9 +2609,17 @@ impl EspansoManagerApp {
     /// Setting it once when the theme changes isn't enough: at startup the window is still being
     /// set up and winit applies the *system* theme to it after our call, which is how a light
     /// window could end up under a dark title bar. Comparing against what the window actually
-    /// reports and correcting any mismatch fixes that case and any other, and costs one integer
-    /// comparison per frame.
-    fn sync_title_bar(&self) {
+    /// reports and correcting any mismatch fixes that case and any other.
+    ///
+    /// What the window reports is not what its title bar shows, though. winit only ever records the
+    /// theme it picked itself — the system's, when the window is made and on every settings
+    /// broadcast — and never one it is asked for, so with the app light over a dark Windows, or dark
+    /// over a light one, the two never agree however often the bar is corrected. It used to be
+    /// corrected on every frame, and each correction is two calls into the window manager: 0.65 ms
+    /// of every frame, measured, three times what drawing the whole list takes. Now a correction
+    /// stands for [`TITLE_BAR_RECHECK`] before the next one. The only thing that can undo it
+    /// meanwhile is a settings broadcast, which winit answers by putting the system's theme back.
+    fn sync_title_bar(&mut self) {
         let Some(window) = &self.window else {
             return;
         };
@@ -2613,8 +2628,16 @@ impl EspansoManagerApp {
         } else {
             winit::window::Theme::Dark
         };
-        if window.theme() != Some(wanted) {
+        if window.theme() == Some(wanted) {
+            return;
+        }
+        let now = Instant::now();
+        let fresh = self
+            .title_bar_set
+            .is_some_and(|(theme, at)| theme == wanted && now.duration_since(at) < TITLE_BAR_RECHECK);
+        if !fresh {
             window.set_theme(Some(wanted));
+            self.title_bar_set = Some((wanted, now));
         }
     }
 

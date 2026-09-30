@@ -12,6 +12,11 @@ was published.
   keeps a core busy the whole time it waits. It now waits for Windows' compositor instead, which
   costs nothing while waiting. Measured on a 200 Hz monitor: 70–100 % of a core down to 32–43 %
   while hovering, 111–114 % down to 33–42 % while scrolling, with the same 200 frames a second.
+- **With the app in a different theme from Windows', hovering costs half of what it did again.**
+  Light over a dark Windows, or dark over a light one, made the app repaint its title bar's
+  colour on every frame, because the window never reports the colour it was given. It now does
+  it at most four times a second. Measured over 2,000 expansions: 38–46 % of a core down to
+  17–25 % while hovering. Nothing changes for the app set to follow Windows.
 - **Saving no longer freezes the window.** Espanso is restarted after every save so it picks up
   the change, and the window used to stop until it was back: half a second at best, up to six
   when it is slow, right as the list scrolls to the saved row. The window now says what was
