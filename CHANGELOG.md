@@ -22,6 +22,11 @@ was published.
   frame, on Windows only. It now skips that when the context is already in place. Measured over
   2,000 expansions following Windows' theme: 19–24 % of a core down to 13–18 % while hovering,
   22–26 % down to 13–14 % while scrolling, and 85–89 MB of the app's own memory down to 79–80.
+- **The window opens sooner, and a third sooner when espanso was not running.** Finding espanso
+  running, or starting it, used to come before the window was made; the two now happen at once,
+  and the status beside the title is still what espanso answered. Measured to the window being on
+  screen: 317–348 ms down to 271–301 with espanso running, 694–711 ms down to 504–518 with it
+  stopped.
 - **Saving no longer freezes the window.** Espanso is restarted after every save so it picks up
   the change, and the window used to stop until it was back: half a second at best, up to six
   when it is slow, right as the list scrolls to the saved row. The window now says what was

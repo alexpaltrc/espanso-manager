@@ -27,9 +27,10 @@
 //! builds this without a console, so a panic without the hook is a program that simply vanishes
 //! off the screen.
 //!
-//! Then the single-instance mutex, then espanso's wizard flags, then the window. Note the mutex is
-//! named per *session*, not per folder: a second copy started from a different folder is still a
-//! second copy, and two tray icons for one program is the thing being prevented.
+//! Then the single-instance mutex, then espanso's wizard flags and espanso itself — on a thread of
+//! their own, while the window is made — then the window. Note the mutex is named per *session*,
+//! not per folder: a second copy started from a different folder is still a second copy, and two
+//! tray icons for one program is the thing being prevented.
 //!
 //! Warnings gathered along the way are not shown as they happen. Nothing here is worth refusing to
 //! start over, so they are carried in `StartupContext` and put on screen together once there is
@@ -60,7 +61,7 @@ mod tray;
 mod ui;
 mod yaml;
 
-use app::{EspansoManagerApp, StartupContext};
+use app::{EspansoManagerApp, EspansoStart, StartupContext};
 use eframe::egui;
 use espanso_ctl::EspansoCtl;
 use settings::SettingsStore;
@@ -231,14 +232,21 @@ fn main() {
     let espansod_path = base_dir.join("espansod.exe");
     let ctl = EspansoCtl::new(espansod_path);
 
-    if !EXPERIMENTAL { silence_espanso_wizard(&ctl, t, &base_dir.join(".espanso-runtime")); }
-
-    let mut espanso_confirmed = match ctl.ensure_running(t) {
-        Ok(()) => true,
-        Err(e) => {
-            startup_warnings.push(i18n::fill(t.startup_espanso_warning, &[("err", &e)]));
-            false
-        }
+    // Asking espanso where it keeps its state and whether it is running is two runs of espansod,
+    // 50 ms together when it is already up, and nothing before the window needs the answers. So they
+    // are asked on the side while the window and its OpenGL context are made, which takes as long,
+    // and the app waits for them just before its first frame — see `EspansoStart`. The wizard's
+    // flags are still written before espanso is started, because it is the same thread, in order.
+    // Every restart below waits for this first, so no two starts of espanso ever overlap.
+    let mut espanso_start = {
+        let ctl = ctl.clone();
+        let runtime_dir = base_dir.join(".espanso-runtime");
+        EspansoStart::spawn(move || {
+            if !EXPERIMENTAL {
+                silence_espanso_wizard(&ctl, t, &runtime_dir);
+            }
+            ctl.ensure_running(t)
+        })
     };
 
     let config_path = base_dir.join(".espanso").join("config").join("default.yml");
@@ -277,6 +285,7 @@ fn main() {
     let tray = match tray::Tray::new(t) {
         Ok(tray) => tray,
         Err(e) => {
+            espanso_start.wait();
             // Leaving is fine. Leaving *quietly* is not: espanso is already running by now, and on
             // any folder this app has opened before, its icon was turned off on a previous run and
             // is off again the moment the daemon reads the config. Walking out at this point would
@@ -317,20 +326,18 @@ fn main() {
     // old order turned espanso's icon off and only then found out whether ours could be shown at
     // all. This is the half of that problem that ordering can fix; the other half — a folder where
     // the setting is already in the file from last time — is what the restore above is for.
+    let mut config_warning = None;
     match config_patch::ensure_managed_settings(&config_path) {
         Ok(true) => {
-            espanso_confirmed = ctl.restart_and_confirm(std::time::Duration::from_secs(6), t).is_ok();
+            espanso_start.wait().confirmed =
+                ctl.restart_and_confirm(std::time::Duration::from_secs(6), t).is_ok();
         }
         Ok(false) => {}
         // Not fatal — the app runs fine, espanso just keeps an icon and a set of toasts we meant
         // to turn off. But it has to be said, because from the outside it is indistinguishable
         // from us having decided to leave them on.
-        Err(e) => startup_warnings.push(i18n::fill(t.config_patch_warning, &[("err", &e.to_string())])),
+        Err(e) => config_warning = Some(i18n::fill(t.config_patch_warning, &[("err", &e.to_string())])),
     }
-
-    // Collected up to here rather than earlier, so the config failure above can join the others in
-    // the one banner instead of needing a second place to appear.
-    let startup_warning = (!startup_warnings.is_empty()).then(|| startup_warnings.join("\n\n"));
 
     let icon = icons::window_fallback();
 
@@ -379,9 +386,10 @@ fn main() {
         config_path,
         tray,
         start_hidden,
-        startup_warning,
+        startup_warnings,
+        config_warning,
         load_error,
-        espanso_confirmed,
+        espanso_start,
     };
 
     let _ = eframe::run_native(

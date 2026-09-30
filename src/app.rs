@@ -2143,15 +2143,42 @@ pub struct StartupContext {
     pub config_path: PathBuf,
     pub tray: Tray,
     pub start_hidden: bool,
-    /// Set if something already went wrong before the window even opened (e.g. the daemon
-    /// failed to start), so we can surface it as soon as the UI is visible instead of it being
-    /// silently lost.
-    pub startup_warning: Option<String>,
+    /// What already went wrong before the window even opened, so we can surface it as soon as the
+    /// UI is visible instead of it being silently lost. Espanso's own failure to start goes after
+    /// these, and `config_warning` after that, which is the order they happened in.
+    pub startup_warnings: Vec<String>,
+    pub config_warning: Option<String>,
     /// Set if the expansions file exists but could not be read. The model is the empty fallback,
     /// so saving stays refused until the app is restarted against a file it can parse.
     pub load_error: Option<String>,
+    pub espanso_start: EspansoStart,
+}
+
+/// Espanso being found running, or started, on a thread of its own while the window is made.
+pub struct EspansoStart {
+    asking: Option<std::thread::JoinHandle<Result<(), String>>>,
+    /// Why espanso could not be started, once [`Self::wait`] has the answer.
+    pub failure: Option<String>,
     /// Whether espanso answered at startup. See [`AppState::espanso_confirmed`].
-    pub espanso_confirmed: bool,
+    pub confirmed: bool,
+}
+
+impl EspansoStart {
+    pub fn spawn(ask: impl FnOnce() -> Result<(), String> + Send + 'static) -> Self {
+        Self { asking: Some(std::thread::spawn(ask)), failure: None, confirmed: false }
+    }
+
+    /// Waits for the answer, the first time. Anything that restarts espanso calls this first, so
+    /// that the restart never runs into a start still under way.
+    pub fn wait(&mut self) -> &mut Self {
+        if let Some(asking) = self.asking.take() {
+            // `ensure_running` does not panic, and a panic would end the process anyway.
+            let answer = asking.join().unwrap_or_else(|_| Err(String::new()));
+            self.confirmed = answer.is_ok();
+            self.failure = answer.err();
+        }
+        self
+    }
 }
 
 impl EspansoManagerApp {
@@ -2193,6 +2220,16 @@ impl EspansoManagerApp {
         }
         let font_status = fonts::install(&cc.egui_ctx, ctx.settings.lang == Lang::Hi);
 
+        // Everything above ran while espanso was still being asked for — see `EspansoStart` — and
+        // nothing below may: the shortcut can restart it, and the banner has to say if it failed.
+        let espanso = ctx.espanso_start.wait();
+        let mut warnings = std::mem::take(&mut ctx.startup_warnings);
+        if let Some(e) = &espanso.failure {
+            warnings.push(crate::i18n::fill(ctx.settings.t().startup_espanso_warning, &[("err", e)]));
+        }
+        warnings.extend(ctx.config_warning.take());
+        let mut startup_warning = (!warnings.is_empty()).then(|| warnings.join("\n\n"));
+
         // Whoever owns Alt+Space also owns the search window, and only one of us can.
         //
         // With [`OWN_LAUNCHER`] off, espanso keeps the shortcut and its own bar, and this app
@@ -2204,7 +2241,7 @@ impl EspansoManagerApp {
         let wanted = if OWN_LAUNCHER { "OFF" } else { "ALT+SPACE" };
         match crate::config_patch::set_search_shortcut(&ctx.config_path, wanted) {
             Ok(true) => {
-                ctx.espanso_confirmed =
+                espanso.confirmed =
                     ctx.ctl.restart_and_confirm(Duration::from_secs(6), ctx.settings.t()).is_ok();
             }
             Ok(false) => {}
@@ -2220,7 +2257,7 @@ impl EspansoManagerApp {
                     ctx.settings.t().config_patch_warning,
                     &[("err", &e.to_string())],
                 );
-                ctx.startup_warning = Some(match ctx.startup_warning.take() {
+                startup_warning = Some(match startup_warning.take() {
                     Some(existing) if existing.contains(&text) => existing,
                     Some(existing) => format!("{existing}\n\n{text}"),
                     None => text,
@@ -2274,7 +2311,7 @@ impl EspansoManagerApp {
             selected: BTreeSet::new(),
             selection_anchor: None,
             paused: false,
-            espanso_confirmed: ctx.espanso_confirmed,
+            espanso_confirmed: ctx.espanso_start.confirmed,
             pause_toggle_requested: false,
             reload,
             reload_note: None,
@@ -2306,7 +2343,7 @@ impl EspansoManagerApp {
             state.search_shortcut = watch.shortcut.label;
         }
 
-        if let Some(warning) = ctx.startup_warning {
+        if let Some(warning) = startup_warning {
             state.set_error_banner(warning);
         }
 
