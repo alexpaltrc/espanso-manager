@@ -64,6 +64,9 @@ winresource = "0.1.31"
 
 # eframe 0.36.1 with one function changed, so that on Windows a frame stops making its OpenGL context
 # current twice when it already is: a third of the main thread's work while the pointer moves over
-# the list. What changed, why, and how to redo it on an upgrade: vendor/README.md.
+# the list. And epaint 0.36.1 with one comparison changed, so that a glyph drawn for the first time
+# no longer re-runs its font's hinting programs: half the first frame. What changed in each, why,
+# and how to redo it on an upgrade: vendor/README.md.
 [patch.crates-io]
 eframe = { path = "vendor/eframe" }
+epaint = { path = "vendor/epaint" }

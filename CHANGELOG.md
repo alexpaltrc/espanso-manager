@@ -27,6 +27,12 @@ was published.
   and the status beside the title is still what espanso answered. Measured to the window being on
   screen: 317–348 ms down to 271–301 with espanso running, 694–711 ms down to 504–518 with it
   stopped.
+- **Text seen for the first time is drawn in a quarter of the time**, which halves the first
+  frame. The interface toolkit prepares each letter's shape the first time it appears, and a
+  mismatch in how it recorded the font's weight made it redo a slow step for nearly every letter
+  of the Regular weight and of the triggers' face. The letters come out exactly as before, pixel
+  for pixel. Measured at start-up: 31 ms of drawing letters down to 7.5, and the window on screen
+  in 252–254 ms instead of 271–301 (473–486 instead of 504–518 with espanso stopped).
 - **Saving no longer freezes the window.** Espanso is restarted after every save so it picks up
   the change, and the window used to stop until it was back: half a second at best, up to six
   when it is slow, right as the list scrolls to the saved row. The window now says what was
