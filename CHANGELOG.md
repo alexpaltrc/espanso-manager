@@ -17,6 +17,11 @@ was published.
   colour on every frame, because the window never reports the colour it was given. It now does
   it at most four times a second. Measured over 2,000 expansions: 38–46 % of a core down to
   17–25 % while hovering. Nothing changes for the app set to follow Windows.
+- **Every frame does a third less work, and the app takes 8 MB less memory.** Before drawing,
+  the interface toolkit handed the graphics context back to the driver and took it again, twice a
+  frame, on Windows only. It now skips that when the context is already in place. Measured over
+  2,000 expansions following Windows' theme: 19–24 % of a core down to 13–18 % while hovering,
+  22–26 % down to 13–14 % while scrolling, and 85–89 MB of the app's own memory down to 79–80.
 - **Saving no longer freezes the window.** Espanso is restarted after every save so it picks up
   the change, and the window used to stop until it was back: half a second at best, up to six
   when it is slow, right as the list scrolls to the saved row. The window now says what was

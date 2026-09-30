@@ -61,3 +61,9 @@ winreg = "0.56.0"
 # `build.rs` for why that resource exists at all, and why a machine without the SDK gets a warning
 # instead of a failed build.
 winresource = "0.1.31"
+
+# eframe 0.36.1 with one function changed, so that on Windows a frame stops making its OpenGL context
+# current twice when it already is: a third of the main thread's work while the pointer moves over
+# the list. What changed, why, and how to redo it on an upgrade: vendor/README.md.
+[patch.crates-io]
+eframe = { path = "vendor/eframe" }
