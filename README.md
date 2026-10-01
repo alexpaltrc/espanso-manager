@@ -7,7 +7,7 @@
 ![Windows](https://img.shields.io/badge/Windows-0078D4?logo=windows&logoColor=white)
 ![Rust](https://img.shields.io/badge/Rust-1.98-CE422B?logo=rust&logoColor=white)
 ![egui](https://img.shields.io/badge/egui-0.36-7B68EE)
-![Version](https://img.shields.io/badge/version-0.0.2-blue)
+![Version](https://img.shields.io/badge/version-0.0.3-blue)
 ![License](https://img.shields.io/badge/license-GPL--3.0-blue)
 ![Portable](https://img.shields.io/badge/portable-no%20installer-2EA043)
 ![Free](https://img.shields.io/badge/free-forever-2EA043)
@@ -15,7 +15,7 @@
 
 **Free forever. No account, nothing sent anywhere.**
 
-### [⬇️ Download for Windows](https://github.com/alexpaltrc/espanso-manager/releases/download/v0.0.2/EspansoManager-Portable-0.0.2.zip)
+### [⬇️ Download for Windows](https://github.com/alexpaltrc/espanso-manager/releases/download/v0.0.3/EspansoManager-Portable-0.0.3.zip)
 
 <sub>10 MB · espanso is in the box · nothing gets installed · unzip and open `EspansoManager.exe`</sub>
 
@@ -66,16 +66,16 @@ second program to go and fetch, and nothing to install — one ZIP, unzip it, op
 | 🎨 | Look like Windows 11: its own light and dark colours, your accent colour, contrast themes, and Windows' animation switch. |
 | 📅 | Insert today's date in the format you like, without learning any syntax. |
 | 🔔 | Live quietly in the tray, and start with Windows if you want it to. |
-| 🪶 | Stay small while it waits there: about 105 MB of memory, and a few hundredths of one percent of one CPU core. |
+| 🪶 | Stay small while it waits there: about 70 MB of memory, and a few hundredths of one percent of one CPU core. |
 | 📤 | Export the folders you choose and send them to a colleague. |
 | 🌍 | Speak English, Spanish, Filipino or Hindi. |
 | 💾 | Keep a backup of every save, in case you change your mind. |
 
 There is more than this in there. It is meant to be found by using it.
 
-> 📏 Those two numbers are measured, not estimated, on version 0.0.2 with the app hidden in the
-> tray: 103.6–104.1 MB of working set, and 16–62 ms of CPU per 150 seconds across five
-> samples, handle count steady at 367–368. Taken on the author's machine, so yours will read
+> 📏 Those two numbers are measured, not estimated, on version 0.0.3 with the app hidden in the
+> tray: 69.9–70.5 MB of working set, and 0–47 ms of CPU per 150 seconds across five samples,
+> handle count 332–340. Taken on the author's machine, so yours will read
 > differently — but idle is meant to cost nothing, and it is checked rather than assumed.
 
 ---
@@ -155,7 +155,7 @@ executable's own directory, which is the older layout where the two executables 
 side, so dropping a new binary into an existing folder keeps working.
 
 ```sh
-cargo test                            # 76 tests
+cargo test                            # 80 tests
 cargo clippy --release --all-targets
 ```
 

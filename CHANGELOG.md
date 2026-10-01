@@ -3,7 +3,7 @@
 All notable changes to EspansoManager. Dates are the day the work was finished, not the day it
 was published.
 
-## Unreleased (0.0.3-dev)
+## 0.0.3 — 2026-09-30
 
 ### Changed
 
