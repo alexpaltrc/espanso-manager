@@ -254,6 +254,9 @@ pub struct ListCache {
     pub folder_names: Vec<String>,
     pub folders: std::collections::BTreeMap<String, crate::folders::FolderInfo>,
     pub rows: Vec<ListRow>,
+    /// Every index into `rows`, in order: what the list shows with no folder picked. Kept so that
+    /// case can be lent out like the other two instead of being counted out afresh every frame.
+    pub all: Vec<usize>,
     /// Folder name → indices into `rows`, in the A→Z order folders are shown in.
     pub grouped: Vec<(String, Vec<usize>)>,
     /// Indices into `rows` for the expansions that belong to no folder.
@@ -628,13 +631,13 @@ impl AppState {
             }
         }
 
-        // No flattened draw order is kept here. It would have to say which rows are on screen, and
-        // that turns on which folders are folded open — egui's business, changing without anything
-        // in this model changing with it. The one place that needs it builds it from these two
-        // fields at the moment it is asked for: `ui::list_view::visible_order`.
+        // The order the list is drawn in is one of `all`, `ungrouped` or a folder's bucket, picked
+        // by the screen's filter. The one place that needs it as triggers builds it at the moment
+        // it is asked for: `ui::list_view::visible_order`.
         ListCache {
             folder_names: self.settings.all_folder_names(),
             folders: crate::folders::summarize(&self.match_file.entries, &self.settings),
+            all: (0..rows.len()).collect(),
             rows,
             grouped: grouped.into_iter().collect(),
             ungrouped,

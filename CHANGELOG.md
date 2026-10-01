@@ -22,6 +22,13 @@ was published.
   frame, on Windows only. It now skips that when the context is already in place. Measured over
   2,000 expansions following Windows' theme: 19–24 % of a core down to 13–18 % while hovering,
   22–26 % down to 13–14 % while scrolling, and 85–89 MB of the app's own memory down to 79–80.
+- **Hovering over a long list, and scrolling it, takes an eighth less of each frame.** Rows far
+  off screen were each handed in turn to the code that draws a row, only to be told to leave a
+  gap; whole runs of them are now passed over in one step, landing exactly where the row-by-row
+  steps did. Frames with no key pressed no longer go through the list's keyboard, and the folder
+  menu prepares its lines only while it is open. Measured over 2,000 expansions, in the time each
+  frame spends building the window: 220 µs down to 191 while hovering, 245 µs down to 213 while
+  scrolling. The list comes out the same, pixel for pixel.
 - **The window opens sooner, and a third sooner when espanso was not running.** Finding espanso
   running, or starting it, used to come before the window was made; the two now happen at once,
   and the status beside the title is still what espanso answered. Measured to the window being on

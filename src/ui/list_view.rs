@@ -39,6 +39,8 @@
 //! like a cheap lookup and is an exclusive lock on the whole context, which is why the pass-wide
 //! answers are hoisted into [`RowPass`] before the loop. The chosen row, the focused one, a row
 //! being dragged and one just saved are exempt: each of them may have to scroll itself into view.
+//! Most frames have none of the last two, and then [`skip_run`] lets go of a whole run of gaps at
+//! once, asking the same question on a copy of the cursor instead of once per row.
 //!
 //! **Hover.** Two slots, one frame apart. A row must know whether it is highlighted *before* it
 //! draws, which is before it can learn whether the pointer is over it, so it reads last frame's
@@ -426,10 +428,17 @@ fn ask_to_move(ctx: &egui::Context, triggers: Vec<String>) {
 /// (`egui-0.36.1/src/context.rs:4189-4191`), not the cheap read it reads like.
 ///
 /// Hoisting is exact rather than an approximation: `dragged_id` is a snapshot fixed for the length
-/// of a pass, and the row height is measured from rows drawn in this same density.
+/// of a pass, the row height is measured from rows drawn in this same density, and the hovered row
+/// is only ever written by [`begin_hover_frame`], before any row draws.
 #[derive(Clone, Copy)]
-struct RowPass {
+struct RowPass<'a> {
     dragged_id: Option<egui::Id>,
+    /// Last frame's answer to which row the pointer is over — see [`hovered_row_pending_key`].
+    hovered: Option<egui::Id>,
+    /// How far the trigger sits below centre to share the replacement's baseline. It turns on the
+    /// two text styles and nothing else, so the first row drawn measures it, in its own `Ui`, and
+    /// every other row of the pass reuses that answer — see [`controls::baseline_drop`].
+    baseline_drop: &'a std::cell::Cell<Option<f32>>,
     /// `None` until the first row has ever been measured, which draws the whole list in full for
     /// exactly one frame — the list can be slow once, never wrong.
     known_height: Option<f32>,
@@ -445,9 +454,17 @@ struct RowPass {
     glide: Option<egui::Rangef>,
 }
 
-fn row_pass(ui: &egui::Ui, compact: bool, select_mode: bool, trigger_w: f32) -> RowPass {
+fn row_pass<'a>(
+    ui: &egui::Ui,
+    compact: bool,
+    select_mode: bool,
+    trigger_w: f32,
+    baseline_drop: &'a std::cell::Cell<Option<f32>>,
+) -> RowPass<'a> {
     RowPass {
         dragged_id: ui.ctx().dragged_id(),
+        hovered: ui.ctx().data(|d| d.get_temp::<egui::Id>(hovered_row_key())),
+        baseline_drop,
         known_height: ui
             .ctx()
             .data(|d| d.get_temp::<f32>(row_height_key(compact, select_mode))),
@@ -614,17 +631,16 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
     }
 
     let list = state.list();
-    // Which rows the filter leaves, in the order the file has them. Reusing the cache's own
-    // grouping means this costs a clone of a list of indices rather than a scan of the expansions.
-    let visible: Vec<usize> = match active.as_deref() {
-        None => (0..list.rows.len()).collect(),
-        Some("") => list.ungrouped.clone(),
+    // Which rows the filter leaves, in the order the file has them. Borrowed from the cache's own
+    // grouping, so a frame costs neither a scan of the expansions nor a copy of the indices.
+    let visible: &[usize] = match active.as_deref() {
+        None => &list.all,
+        Some("") => &list.ungrouped,
         Some(folder) => list
             .grouped
             .iter()
             .find(|(name, _)| name == folder)
-            .map(|(_, indices)| indices.clone())
-            .unwrap_or_default(),
+            .map_or(&[], |(_, indices)| indices.as_slice()),
     };
 
     // The open row has to be one the list is showing: an inspector about an expansion the search
@@ -661,7 +677,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
                 None => (full, None),
             };
             ui.scope_builder(egui::UiBuilder::new().max_rect(list_rect), |ui| {
-                library(ui, state, &list, &visible, active.as_deref(), is_light);
+                library(ui, state, &list, visible, active.as_deref(), is_light);
             });
             if let Some((rect, trigger)) = side {
                 ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
@@ -672,7 +688,7 @@ pub fn show(ui: &mut egui::Ui, state: &mut AppState) {
         }
     }
 
-    keyboard(ui, state, &list, &visible, active.as_deref(), popup_was_open);
+    keyboard(ui, state, &list, visible, active.as_deref(), popup_was_open);
     end_hover_frame(&ctx);
 }
 
@@ -1001,16 +1017,6 @@ fn folder_menu(
     let mut pick: Option<Option<String>> = None;
     let mut create = false;
     let mut options = false;
-    let counts: Vec<usize> = list
-        .folder_names
-        .iter()
-        .map(|folder| {
-            list.grouped
-                .iter()
-                .find(|(name, _)| name == folder)
-                .map_or(0, |(_, indices)| indices.len())
-        })
-        .collect();
     let room = ui.ctx().content_rect().bottom() - picker.rect.bottom() - 160.0;
     let real_folder = active.filter(|f| !f.is_empty());
     let options_label = studio::text(
@@ -1020,19 +1026,32 @@ fn folder_menu(
         "Mga opsyon ng folder…",
         "फ़ोल्डर विकल्प…",
     );
-    // The menu line draws its own plus; the string carries one for the places that have no icon.
-    let new_folder = format!(
-        "{}…",
-        t.add_new_folder.trim_start_matches(['+', ' ']).trim_end_matches('…')
-    );
-    let rename_keys = keys::text(keys::RENAME, lang);
 
     let by_keyboard = picker.clicked() && picker.has_focus();
+    // The picker is drawn on every frame and its menu is open on almost none of them, so what only
+    // the open menu shows is worked out inside it.
     egui::Popup::menu(picker)
         .align(egui::RectAlign::BOTTOM_START)
         .gap(controls::GAP_TIGHT)
         .width(MENU_WIDTH)
         .show(|ui| {
+            let counts: Vec<usize> = list
+                .folder_names
+                .iter()
+                .map(|folder| {
+                    list.grouped
+                        .iter()
+                        .find(|(name, _)| name == folder)
+                        .map_or(0, |(_, indices)| indices.len())
+                })
+                .collect();
+            // The menu line draws its own plus; the string carries one for the places that have
+            // no icon.
+            let new_folder = format!(
+                "{}…",
+                t.add_new_folder.trim_start_matches(['+', ' ']).trim_end_matches('…')
+            );
+            let rename_keys = keys::text(keys::RENAME, lang);
             ui.spacing_mut().item_spacing.y = 0.0;
             let first = ui.next_auto_id();
             let total = list.rows.len().to_string();
@@ -1297,6 +1316,11 @@ fn keyboard(
     popup_was_open: bool,
 ) {
     let ctx = ui.ctx().clone();
+    // Everything below answers a key pressed this frame, and almost no frame has one; then there
+    // is nothing to look up, least of all whether the focus sits on any of the rows.
+    if !ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. }))) {
+        return;
+    }
     if state.pending_confirm.is_some() || state.pending_transfer.is_some() || state.settings_open {
         return;
     }
@@ -1350,8 +1374,6 @@ fn keyboard(
         return;
     }
 
-    let order: Vec<&str> = visible.iter().map(|&i| list.rows[i].trigger.as_str()).collect();
-    let here = open.as_deref().and_then(|t| order.iter().position(|o| *o == t));
     let step = if keys::pressed(&ctx, keys::DOWN) {
         Some(1isize)
     } else if keys::pressed(&ctx, keys::UP) {
@@ -1360,18 +1382,20 @@ fn keyboard(
         None
     };
     if let Some(step) = step {
-        if picking || order.is_empty() {
+        if picking || visible.is_empty() {
             return;
         }
+        let trigger_at = |n: usize| list.rows[visible[n]].trigger.as_str();
+        let here = open.as_deref().and_then(|t| (0..visible.len()).position(|n| trigger_at(n) == t));
         let next = match here {
-            Some(i) => (i as isize + step).clamp(0, order.len() as isize - 1) as usize,
+            Some(i) => (i as isize + step).clamp(0, visible.len() as isize - 1) as usize,
             None if step > 0 => 0,
-            None => order.len() - 1,
+            None => visible.len() - 1,
         };
-        set_open_row(&ctx, Some(order[next]));
+        set_open_row(&ctx, Some(trigger_at(next)));
         ctx.data_mut(|d| d.insert_temp(scroll_to_open_key(), true));
         if focused.is_some() {
-            ctx.memory_mut(|m| m.request_focus(row_id(order[next])));
+            ctx.memory_mut(|m| m.request_focus(row_id(trigger_at(next))));
         }
         return;
     }
@@ -1447,7 +1471,8 @@ fn show_list(
 ) {
     let t = state.t();
     let trigger_w = trigger_column(ui.available_width());
-    let pass = row_pass(ui, state.settings.compact_view, picking, trigger_w);
+    let baseline_drop = std::cell::Cell::new(None);
+    let pass = row_pass(ui, state.settings.compact_view, picking, trigger_w, &baseline_drop);
     let open = open_row(ui.ctx());
     let height = ui.available_height().max(LIST_MIN_HEIGHT);
     // The one row Tab stops on: the chosen one, or the first. The arrows do the rest, as in every
@@ -1515,9 +1540,23 @@ fn show_list(
             let origin = ui.cursor().top();
             let slot = ui.painter().add(egui::Shape::Noop);
             let pass = RowPass { glide: glide_band(ui.ctx(), origin), ..pass };
+            // With nothing dragged and nothing just saved, the only row exempt from becoming a gap
+            // is the one Tab stops on, so whole runs of the rest can go at once — see [`skip_run`].
+            let skippable = pass
+                .known_height
+                .filter(|_| pass.dragged_id.is_none() && pass.flash.is_none());
             let mut previous_lit = true; // No rule above the first row.
-            for &index in visible {
-                let row = &list.rows[index];
+            let mut next = 0;
+            while next < visible.len() {
+                if let Some(height) = skippable {
+                    let skipped = skip_run(ui, list, &visible[next..], height, tab_stop.as_deref());
+                    if skipped > 0 {
+                        next += skipped;
+                        previous_lit = false;
+                        continue;
+                    }
+                }
+                let row = &list.rows[visible[next]];
                 let is_open = open.as_deref() == Some(row.trigger.as_str());
                 let focusable = tab_stop.as_deref() == Some(row.trigger.as_str());
                 previous_lit = show_row(
@@ -1531,6 +1570,7 @@ fn show_list(
                     focusable,
                     previous_lit,
                 );
+                next += 1;
             }
             glide(ui, slot, origin, is_light);
         });
@@ -1571,6 +1611,54 @@ fn row_id(trigger: &str) -> egui::Id {
     egui::Id::new("expansion_row").with(trigger)
 }
 
+/// Lets go, in one step, of the run of rows at the head of `rows` that [`show_row`] would each
+/// have replaced by a gap, and says how many that was. Zero means the first of them is to be drawn.
+///
+/// Off screen is most of a long list on every frame, and going through `show_row` for each of
+/// those rows only to be told "gap" cost more than drawing the fifteen that can be seen. The test
+/// here is that same test, asked in the same order with the same arithmetic, on a running copy of
+/// the cursor — `Ui::add_space` adds `height.round_ui()` — so the run stops on exactly the row the
+/// one-by-one path would have drawn. The caller only asks when nothing is being dragged and nothing
+/// was just saved, which leaves the row Tab stops on (the chosen one, when there is one) as the
+/// only row that has to be drawn wherever it is.
+///
+/// The cursor then moves once, when one move lands it exactly where the row-by-row moves would
+/// have; when rounding along the way says otherwise, it moves row by row, as it always did.
+fn skip_run(
+    ui: &mut egui::Ui,
+    list: &ListCache,
+    rows: &[usize],
+    height: f32,
+    tab_stop: Option<&str>,
+) -> usize {
+    use egui::emath::GuiRounding as _;
+    let view = ui.clip_rect();
+    let band = height * 3.0;
+    let step = height.round_ui();
+    let start = ui.cursor().top();
+    let mut top = start;
+    let mut skipped = 0;
+    for &index in rows {
+        if tab_stop == Some(list.rows[index].trigger.as_str())
+            || !(top + height < view.top() - band || top > view.bottom() + band)
+        {
+            break;
+        }
+        top += step;
+        skipped += 1;
+    }
+    if skipped > 0 {
+        if start + (top - start).round_ui() == top {
+            ui.add_space(top - start);
+        } else {
+            for _ in 0..skipped {
+                ui.add_space(height);
+            }
+        }
+    }
+    skipped
+}
+
 /// Draws one row, or a gap of exactly its height when it is far enough off screen not to matter.
 ///
 /// Returns whether the row ended up highlighted, which is what the next row needs in order to know
@@ -1582,7 +1670,7 @@ fn show_row(
     list: &ListCache,
     row: &ListRow,
     visible: &[usize],
-    pass: RowPass,
+    pass: RowPass<'_>,
     is_open: bool,
     focusable: bool,
     previous_lit: bool,
@@ -1625,7 +1713,8 @@ fn show_row(
     }
 
     let before = ui.cursor().top();
-    let lit = show_row_inner(ui, state, list, row, visible, pass, is_open, focusable, previous_lit);
+    let lit =
+        show_row_inner(ui, state, list, row, id, visible, pass, is_open, focusable, previous_lit);
     if !dragging {
         let height = ui.cursor().top() - before;
         // `known_height` is this frame's snapshot, so on the one frame where the height actually
@@ -1646,19 +1735,19 @@ fn show_row_inner(
     state: &mut AppState,
     list: &ListCache,
     row: &ListRow,
+    drag_id: egui::Id,
     visible: &[usize],
-    pass: RowPass,
+    pass: RowPass<'_>,
     is_open: bool,
     focusable: bool,
     previous_lit: bool,
 ) -> bool {
     let t = state.t();
-    let trigger = row.trigger.clone();
-    let is_selected = state.selected.contains(&trigger);
-    let drag_id = row_id(&trigger);
+    let trigger = row.trigger.as_str();
+    let is_selected = state.selected.contains(trigger);
     let is_light = !ui.visuals().dark_mode;
     let accent_color = accent(ui.visuals());
-    let hovered_row = ui.ctx().data(|d| d.get_temp::<egui::Id>(hovered_row_key())) == Some(drag_id);
+    let hovered_row = pass.hovered == Some(drag_id);
     let flash = pass
         .flash
         .and_then(|(lit, amount)| (lit == drag_id).then_some(amount));
@@ -1684,7 +1773,7 @@ fn show_row_inner(
         if is_selected {
             state.selected.iter().cloned().collect()
         } else {
-            vec![trigger.clone()]
+            vec![trigger.to_owned()]
         }
     };
 
@@ -1798,21 +1887,21 @@ fn show_row_inner(
             set_open_row(ui.ctx(), None);
             let order = visible_order(list, visible);
             // In picking mode a plain click is a tick, which is what Ctrl already means here.
-            state.click_select(&trigger, ctrl || picking, shift, &order);
+            state.click_select(trigger, ctrl || picking, shift, &order);
         } else {
-            set_open_row(ui.ctx(), if is_open { None } else { Some(&trigger) });
+            set_open_row(ui.ctx(), if is_open { None } else { Some(trigger) });
         }
         ui.ctx().request_repaint();
     }
     if edit_clicked {
-        open_edit_for(state, &trigger);
+        open_edit_for(state, trigger);
     }
 
     lit
 }
 
 /// The row: a tick box when picking, the trigger in its column, and what it writes, quietly.
-fn closed_row(ui: &mut egui::Ui, row: &ListRow, pass: RowPass, is_selected: bool, is_light: bool) {
+fn closed_row(ui: &mut egui::Ui, row: &ListRow, pass: RowPass<'_>, is_selected: bool, is_light: bool) {
     let pad_y = if pass.compact {
         controls::ROW_PAD_DENSE
     } else {
@@ -1839,9 +1928,8 @@ fn closed_row(ui: &mut egui::Ui, row: &ListRow, pass: RowPass, is_selected: bool
                     controls::paint_checkbox(ui, rect, is_selected);
                 }
 
-                let trigger_text = egui::RichText::new(&row.trigger)
-                    .monospace()
-                    .color(ui.visuals().strong_text_color());
+                let strong = ui.visuals().strong_text_color();
+                let trigger_text = || egui::RichText::new(&row.trigger).monospace().color(strong);
                 // A hard column, not a minimum: a trigger wider than the column is cut short here
                 // and shown whole in the detail. Letting it push past instead would move the start
                 // of the replacement from row to row.
@@ -1849,18 +1937,22 @@ fn closed_row(ui: &mut egui::Ui, row: &ListRow, pass: RowPass, is_selected: bool
                 // Laid out and truncated the way a label would be, but painted by hand, a hair
                 // below centre: centred, the smaller monospace stood a point above the
                 // replacement. See [`controls::baseline_drop`].
-                let trigger = egui::WidgetText::from(trigger_text.clone()).into_galley(
+                let trigger = egui::WidgetText::from(trigger_text()).into_galley(
                     ui,
                     Some(egui::TextWrapMode::Truncate),
                     (pass.trigger_w - spacing).max(1.0),
                     egui::TextStyle::Body,
                 );
                 let (slot, hover) = ui.allocate_exact_size(trigger.size(), egui::Sense::hover());
-                let drop = controls::baseline_drop(
-                    ui,
-                    egui::RichText::new("x"),
-                    egui::RichText::new("x").monospace(),
-                );
+                let drop = pass.baseline_drop.get().unwrap_or_else(|| {
+                    let drop = controls::baseline_drop(
+                        ui,
+                        egui::RichText::new("x"),
+                        egui::RichText::new("x").monospace(),
+                    );
+                    pass.baseline_drop.set(Some(drop));
+                    drop
+                });
                 let elided = trigger.elided;
                 ui.painter().galley(
                     slot.left_top() + egui::vec2(0.0, drop),
@@ -1868,7 +1960,7 @@ fn closed_row(ui: &mut egui::Ui, row: &ListRow, pass: RowPass, is_selected: bool
                     egui::Color32::PLACEHOLDER,
                 );
                 if elided {
-                    hover.on_hover_text(trigger_text);
+                    hover.on_hover_text(trigger_text());
                 }
                 let padding = pass.trigger_w - slot.width() - spacing;
                 if padding > 0.0 {
