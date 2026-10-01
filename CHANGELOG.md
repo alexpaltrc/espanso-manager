@@ -14,9 +14,12 @@ was published.
   while hovering, 111–114 % down to 33–42 % while scrolling, with the same 200 frames a second.
 - **With the app in a different theme from Windows', hovering costs half of what it did again.**
   Light over a dark Windows, or dark over a light one, made the app repaint its title bar's
-  colour on every frame, because the window never reports the colour it was given. It now does
-  it at most four times a second. Measured over 2,000 expansions: 38–46 % of a core down to
-  17–25 % while hovering. Nothing changes for the app set to follow Windows.
+  colour on every frame, because the window never reports the colour it was given. It now reads
+  the colour the bar is actually wearing, which costs next to nothing, and repaints it only when
+  Windows has put its own back, as it does when one of its settings changes. Measured over 2,000
+  expansions: 38–46 % of a core down to 17–25 % while hovering, with the bar then still repainted
+  about twenty times in every thousand frames; reading its colour first took that to none.
+  Nothing changes for the app set to follow Windows.
 - **Every frame does a third less work, and the app takes 8 MB less memory.** Before drawing,
   the interface toolkit handed the graphics context back to the driver and took it again, twice a
   frame, on Windows only. It now skips that when the context is already in place. Measured over

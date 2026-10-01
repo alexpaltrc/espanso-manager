@@ -2009,6 +2009,45 @@ fn set_cloaked(window: &winit::window::Window, cloaked: bool) {
     }
 }
 
+/// Whether the title bar is wearing dark right now, read from the very attribute winit writes when
+/// it themes the window (`WCA_USEDARKMODECOLORS`), through the getter twinned with winit's setter,
+/// so the answer cannot drift from what winit last did. Half a microsecond, measured. `None` when
+/// this Windows does not say, and then nothing can be concluded from it.
+fn title_bar_is_dark(window: &winit::window::Window) -> Option<bool> {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
+    #[repr(C)]
+    struct Attribute {
+        attrib: u32,
+        data: *mut std::ffi::c_void,
+        size: usize,
+    }
+    type Getter = unsafe extern "system" fn(HWND, *mut Attribute) -> windows::core::BOOL;
+    const WCA_USEDARKMODECOLORS: u32 = 26;
+    // Undocumented, like the setter winit relies on, so it is looked up rather than linked.
+    static GETTER: std::sync::OnceLock<Option<Getter>> = std::sync::OnceLock::new();
+    let getter = (*GETTER.get_or_init(|| unsafe {
+        let user32 = GetModuleHandleW(windows::core::w!("user32.dll")).ok()?;
+        let found = GetProcAddress(user32, windows::core::s!("GetWindowCompositionAttribute"))?;
+        Some(std::mem::transmute::<unsafe extern "system" fn() -> isize, Getter>(found))
+    }))?;
+    let hwnd = hwnd_of(window)?;
+    let mut dark = -1i32;
+    let mut attribute = Attribute {
+        attrib: WCA_USEDARKMODECOLORS,
+        data: (&mut dark as *mut i32).cast(),
+        size: std::mem::size_of::<i32>(),
+    };
+    if !unsafe { getter(hwnd, &mut attribute) }.as_bool() {
+        return None;
+    }
+    match dark {
+        0 => Some(false),
+        1 => Some(true),
+        _ => None,
+    }
+}
+
 /// The work area the window should be measured against: the monitor it is on, falling back to the
 /// primary one only when that cannot be determined.
 fn work_area_for(window: &winit::window::Window) -> Option<crate::display::WorkArea> {
@@ -2659,6 +2698,10 @@ impl EspansoManagerApp {
     /// of every frame, measured, three times what drawing the whole list takes. Now a correction
     /// stands for [`TITLE_BAR_RECHECK`] before the next one. The only thing that can undo it
     /// meanwhile is a settings broadcast, which winit answers by putting the system's theme back.
+    ///
+    /// And it is only made again once something has undone it: what the bar is wearing is read off
+    /// the window first ([`title_bar_is_dark`]), which costs next to nothing. Where Windows will not
+    /// say, the correction is remade every [`TITLE_BAR_RECHECK`] regardless, as it always was.
     fn sync_title_bar(&mut self) {
         let Some(window) = &self.window else {
             return;
@@ -2669,6 +2712,9 @@ impl EspansoManagerApp {
             winit::window::Theme::Dark
         };
         if window.theme() == Some(wanted) {
+            return;
+        }
+        if title_bar_is_dark(window) == Some(wanted == winit::window::Theme::Dark) {
             return;
         }
         let now = Instant::now();
